@@ -1,4 +1,7 @@
-name: Build and publish release
+name: Build and publish GitHub release
+
+# Fork of deluxebear/colabllm: the upstream PyPI publishing job is removed because the
+# `colabllm` PyPI name belongs to the original project. Releases are published on GitHub only.
 
 on:
   push:
@@ -91,23 +94,3 @@ jobs:
             gh release edit "$RELEASE_TAG" --draft=false
           fi
 
-  pypi:
-    needs: github-release
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment:
-      name: pypi
-      url: https://pypi.org/p/colabllm
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-distributions
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: '0.12.8'
-      - name: Publish the verified packages to PyPI
-        run: |
-          (cd dist && sha256sum --check SHA256SUMS)
-          uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist/*.whl dist/*.tar.gz

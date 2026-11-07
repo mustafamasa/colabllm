@@ -3,24 +3,31 @@
 Büyük model servislerini Google Colab GPU'larında çalıştırır ve Cloudflare Tunnel (varsayılan) ya da FRP + Caddy üzerinden internete açar.
 **"Bir servis = bir notebook (`src/colabllm/services/<name>.ipynb`) + bir çalıştırma betiği (`src/colabllm/services/<name>.py`)"** kuralına uyar.
 
-> Bu depo [deluxebear/colabllm](https://github.com/deluxebear/colabllm) projesinin çevrilmiş bir kopyasıdır: kod, CLI çıktıları, arayüz metinleri ve belgeler İngilizcedir; bu README Türkçedir.
+> **Kaynak:** Bu depo, [eric xiong (deluxebear)](https://github.com/deluxebear) tarafından geliştirilen
+> [deluxebear/colabllm](https://github.com/deluxebear/colabllm) projesinin bir fork'udur ve orijinal projenin
+> MIT lisansı altında dağıtılır. Servislerin, notebook'ların ve CLI'ın temel tasarımı ve geliştirmesi orijinal projeye aittir.
+>
+> Bu fork'taki başlıca değişiklikler:
+> - Kod, CLI çıktıları, arayüz metinleri ve belgeler İngilizceye çevrildi; bu README Türkçedir.
+> - `colabllm ui`: yerel web kontrol paneli (örnekler, servis kataloğu, servise özel başlatma seçenekleri, toplu durdurma/silme, loglar, tanılama).
+> - `colabllm <runtime> purge`: durmuş örneklerin yerel kaydını güvenle silen yaşam döngüsü komutu.
+>
+> Orijinal projedeki güncellemeler için [upstream deposunu](https://github.com/deluxebear/colabllm) takip edin.
 
 ## Tek komut girişi
 
-Kullanıcılar dağıtım paketiyle kurar, kaynak kodu klonlamaya gerek yoktur. Wheel dosyasını [GitHub Releases](https://github.com/deluxebear/colabllm/releases) sayfasından indirip kurun (özel depo ise erişim izni gerekir):
+Bu fork doğrudan GitHub'dan kurulur; kaynak kodu klonlamaya gerek yoktur:
 
 ```bash
-uv tool install ./colabllm-0.1.4-py3-none-any.whl
+uv tool install git+https://github.com/mustafamasa/colabllm@english
 # Komut dizini henüz PATH'te değilse
 uv tool update-shell
+# Güncelleme
+uv tool install --force git+https://github.com/mustafamasa/colabllm@english
 ```
 
-Sürümler PyPI'a yayınlandıktan sonra doğrudan oradan da kurulup güncellenebilir:
-
-```bash
-uv tool install colabllm
-uv tool upgrade colabllm
-```
+Yayınlanmış sürümlerin wheel dosyaları [GitHub Releases](https://github.com/mustafamasa/colabllm/releases) sayfasındadır (`uv tool install ./colabllm-<sürüm>-py3-none-any.whl`).
+PyPI'daki `colabllm` paketi orijinal projeye aittir ve bu fork'un değişikliklerini içermez.
 
 Ardından herhangi bir dizinde `colabllm <runtime-adı> <komut> [argümanlar...]` kullanılabilir:
 
@@ -59,7 +66,7 @@ Güncellemeden önce çalışan servisleri durdurun, sonra yeniden başlatın; b
 ## Runtime kullanım kılavuzları
 
 Her runtime'ın komutları, API/arayüz akışları, girdi/çıktıları ve kurtarma davranışı aşağıdaki "Runtime kılavuzları" tablosundaki belgelerdedir.
-Ortak kurallar [Ortak runtime işlemleri](https://github.com/deluxebear/colabllm/blob/master/docs/runtime-common.md) belgesinde toplanmıştır; kimlik doğrulama, Drive yolları, zaman aşımları ve çoklu örnekleri anlamak için önce onu okuyun.
+Ortak kurallar [Ortak runtime işlemleri](https://github.com/mustafamasa/colabllm/blob/english/docs/runtime-common.md) belgesinde toplanmıştır; kimlik doğrulama, Drive yolları, zaman aşımları ve çoklu örnekleri anlamak için önce onu okuyun.
 Kullanım belgelerinin kaynağı `docs/<runtime>.md` dosyalarıdır; kullanıcı skill'indeki karşılıkları senkronizasyon aracıyla üretilir:
 
 ```bash
@@ -71,7 +78,7 @@ Kullanım değiştiğinde ya da yeni runtime eklendiğinde senkronize edin; yere
 
 ## Agent Skill kurulumu
 
-Kökteki [skills/colabllm](https://github.com/deluxebear/colabllm/blob/master/skills/colabllm/SKILL.md), bu projenin tüm runtime'larını kapsayan, kullanıcıya yönelik bağımsız bir skill sunar.
+Kökteki [skills/colabllm](https://github.com/mustafamasa/colabllm/blob/english/skills/colabllm/SKILL.md), bu projenin tüm runtime'larını kapsayan, kullanıcıya yönelik bağımsız bir skill sunar.
 Görev bazında yüklenen OCR, ses, çıkarım, medya ve sorun giderme referansları içerir; kaynak depoya veya kişisel kurulum ayarlarına bağlı değildir.
 
 Wheel ve kaynak paketi skill'in tamamını içerir; CLI kurulduktan sonra dışa aktarılabilir:
@@ -115,7 +122,7 @@ python tools/check_distribution.py dist/colabllm-0.1.4-py3-none-any.whl
 
 Sürüm numarasının tek kaynağı `pyproject.toml`'dur; CLI sürümü kurulu paketin meta verisinden okur.
 `MAJOR.MINOR.PATCH` kullanılır: düzeltmeler PATCH'i, yeni özellikler MINOR'u, uyumsuz değişiklikler MAJOR'u artırır;
-`0.x` geliştirme aşamasında uyumsuz değişiklikler MINOR'u artırır ve [CHANGELOG.md](https://github.com/deluxebear/colabllm/blob/master/CHANGELOG.md) içinde açıklanır.
+`0.x` geliştirme aşamasında uyumsuz değişiklikler MINOR'u artırır ve [CHANGELOG.md](https://github.com/mustafamasa/colabllm/blob/english/CHANGELOG.md) içinde açıklanır.
 Güncel sürüm `0.1.4`, Git etiketi `v0.1.4`'tür (`0.1.0` geri çekildi); sonraki bir yayın örneği:
 
 ```bash
@@ -125,27 +132,21 @@ python tools/check_release.py --tag v0.1.5
 git add pyproject.toml CHANGELOG.md
 git commit -m "chore: release 0.1.5"
 git tag -a v0.1.5 -m "Release 0.1.5"
-git push origin master
+git push origin english
 git push origin v0.1.5
 ```
 
-`v*` etiketinin gönderilmesi [release.yml](https://github.com/deluxebear/colabllm/blob/master/.github/workflows/release.yml) iş akışını tetikler:
+`v*` etiketinin gönderilmesi [release.yml](https://github.com/mustafamasa/colabllm/blob/english/.github/workflows/release.yml) iş akışını tetikler:
 
 1. Etiket, paket sürümü ve değişiklik kaydının tutarlılığını doğrular; Linux/macOS × Python 3.12–3.14 CI'ını yeniden kullanır.
 2. Wheel ve sdist'i derler, izole kurulumu doğrular, SHA256SUMS üretir ve Actions artifact olarak saklar.
 3. Kurulum paketleri ve sağlama dosyalarıyla bir GitHub Release yayınlar; sürüm notları güncel sürümün CHANGELOG girdisinden alınır.
-4. Doğrulanmış aynı paketleri Trusted Publishing ile PyPI'a yükler.
 
-PyPI'ı ilk kez etkinleştirmek için proje sahibinin [PyPI Publishing](https://pypi.org/manage/account/publishing/) sayfasında
-bir Pending Publisher eklemesi gerekir: proje `colabllm`, Owner `deluxebear`, Repository `colabllm`,
-Workflow `release.yml`, Environment `pypi`. PyPI projesi zaten varsa aynı yayıncı projenin Publishing ayarlarına eklenir.
-Actions, `pypi` environment ve OIDC kullanır; uzun ömürlü bir PyPI API token'ı gerekmez.
-Bkz. [PyPI Trusted Publisher açıklaması](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
-
-PyPI yüklemesi başarısız olsa da GitHub Release indirilebilir; kimlik ayarını düzelttikten sonra Actions'ta **Re-run failed jobs** seçin.
+Bu fork PyPI'a yayın yapmaz: `colabllm` paket adı orijinal projeye aittir, bu yüzden orijinal iş akışındaki PyPI adımı kaldırılmıştır.
+Bir iş başarısız olursa hatayı düzelttikten sonra Actions'ta **Re-run failed jobs** seçin.
 Mevcut bir etiket için release iş akışı elle de çalıştırılabilir; yayınlanmış bir GitHub Release'in üzerine yazılamaz, bu yüzden önce yalnızca başarısız işleri yeniden çalıştırın.
 Yayınlanmış sürümlerde etiket taşınmaz ve paketler değiştirilmez; düzeltmeden sonra yeni sürüm yayınlanır.
-Yerel wheel ile kuranlar yeni wheel'i kurarak güncelleyebilir; PyPI ile kuranlar `uv tool upgrade colabllm` kullanır.
+Yerel wheel ile kuranlar yeni wheel'i kurarak, GitHub'dan kuranlar `uv tool install --force git+https://github.com/mustafamasa/colabllm@english` ile güncelleyebilir.
 
 ## CLI davranış kuralları
 
@@ -260,20 +261,20 @@ Yerel testlerdeki gerçek FRP entegrasyon testi için ayrıca `COLABSVC_FRP_TEST
 
 | Servis | Varsayılan GPU | Kimlik doğrulama | Sabit alan adı örneği (ana alan adı `example.com` ise) | Ayrıntılı kılavuz |
 | --- | --- | --- | --- | --- |
-| **NVIDIA-Nemotron-3.5-Transcribe-30B-A4B** | `G4` | `vLLM` Bearer API Key (`builtin`) | `https://transcribe.example.com` | [docs/nemotron-transcribe.md](https://github.com/deluxebear/colabllm/blob/master/docs/nemotron-transcribe.md) |
-| **Qwen3-TTS** | `L4` | Bearer API Key (`builtin`) | `https://qwen3-tts.example.com` | [docs/qwen3-tts.md](https://github.com/deluxebear/colabllm/blob/master/docs/qwen3-tts.md) |
-| **IndexTTS-2.5** | `L4` | Bearer API Key (`builtin`) | `https://indextts.example.com` | [docs/indextts.md](https://github.com/deluxebear/colabllm/blob/master/docs/indextts.md) |
-| **Unlimited-OCR 2** | `A100` | Caddy (Basic Auth + Bearer) | `https://unlimited-ocr.example.com` | [docs/unlimited-ocr.md](https://github.com/deluxebear/colabllm/blob/master/docs/unlimited-ocr.md) |
-| **LongCat-Video-Avatar 1.5** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-avatar.example.com` | [docs/longcat-avatar.md](https://github.com/deluxebear/colabllm/blob/master/docs/longcat-avatar.md) |
-| **LongCat-Video** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-video.example.com` | [docs/longcat-video.md](https://github.com/deluxebear/colabllm/blob/master/docs/longcat-video.md) |
-| **Openjutsu (MiniMax H3 Video Studio)** | `G4` | Caddy (Basic Auth + Bearer) | `https://openjutsu.example.com` | [docs/openjutsu.md](https://github.com/deluxebear/colabllm/blob/master/docs/openjutsu.md) |
-| **FLUX 3 Image Klein (T2I + Multi-Ref I2I + PUP)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://flux-klein.example.com` | [docs/flux-klein.md](https://github.com/deluxebear/colabllm/blob/master/docs/flux-klein.md) |
-| **Qwen-Image-2.1 (T2I + 1-4 Ref RGBA I2I)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://qwen-image.example.com` | [docs/qwen-image.md](https://github.com/deluxebear/colabllm/blob/master/docs/qwen-image.md) |
-| **ComfyUI + ComfyUI-Manager** | `L4` | Caddy (Basic Auth + Bearer) | `https://comfyui.example.com` | [docs/comfyui.md](https://github.com/deluxebear/colabllm/blob/master/docs/comfyui.md) |
-| **Qwen3.8-Flash-Next (800K + Vision)** | `G4` | `llama-server` Bearer API Key | `https://qwen.example.com` | [docs/qwen-flash.md](https://github.com/deluxebear/colabllm/blob/master/docs/qwen-flash.md) |
-| **DeepSeek-V4.1-Flash Coder (Auto Max 1M + Vision)** | `G4` | `llama-server` Bearer API Key | `https://deepseek.example.com` | [docs/deepseek-coder.md](https://github.com/deluxebear/colabllm/blob/master/docs/deepseek-coder.md) |
-| **Ollama** | `T4` | Caddy (Basic Auth + Bearer + `x-api-key`) | `https://ollama.example.com` | [docs/ollama.md](https://github.com/deluxebear/colabllm/blob/master/docs/ollama.md) |
-| **Unsloth Studio** | `L4` | Yerleşik web girişi (`builtin`) | `https://unsloth-studio.example.com` | [docs/unsloth-studio.md](https://github.com/deluxebear/colabllm/blob/master/docs/unsloth-studio.md) |
+| **NVIDIA-Nemotron-3.5-Transcribe-30B-A4B** | `G4` | `vLLM` Bearer API Key (`builtin`) | `https://transcribe.example.com` | [docs/nemotron-transcribe.md](https://github.com/mustafamasa/colabllm/blob/english/docs/nemotron-transcribe.md) |
+| **Qwen3-TTS** | `L4` | Bearer API Key (`builtin`) | `https://qwen3-tts.example.com` | [docs/qwen3-tts.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen3-tts.md) |
+| **IndexTTS-2.5** | `L4` | Bearer API Key (`builtin`) | `https://indextts.example.com` | [docs/indextts.md](https://github.com/mustafamasa/colabllm/blob/english/docs/indextts.md) |
+| **Unlimited-OCR 2** | `A100` | Caddy (Basic Auth + Bearer) | `https://unlimited-ocr.example.com` | [docs/unlimited-ocr.md](https://github.com/mustafamasa/colabllm/blob/english/docs/unlimited-ocr.md) |
+| **LongCat-Video-Avatar 1.5** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-avatar.example.com` | [docs/longcat-avatar.md](https://github.com/mustafamasa/colabllm/blob/english/docs/longcat-avatar.md) |
+| **LongCat-Video** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-video.example.com` | [docs/longcat-video.md](https://github.com/mustafamasa/colabllm/blob/english/docs/longcat-video.md) |
+| **Openjutsu (MiniMax H3 Video Studio)** | `G4` | Caddy (Basic Auth + Bearer) | `https://openjutsu.example.com` | [docs/openjutsu.md](https://github.com/mustafamasa/colabllm/blob/english/docs/openjutsu.md) |
+| **FLUX 3 Image Klein (T2I + Multi-Ref I2I + PUP)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://flux-klein.example.com` | [docs/flux-klein.md](https://github.com/mustafamasa/colabllm/blob/english/docs/flux-klein.md) |
+| **Qwen-Image-2.1 (T2I + 1-4 Ref RGBA I2I)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://qwen-image.example.com` | [docs/qwen-image.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen-image.md) |
+| **ComfyUI + ComfyUI-Manager** | `L4` | Caddy (Basic Auth + Bearer) | `https://comfyui.example.com` | [docs/comfyui.md](https://github.com/mustafamasa/colabllm/blob/english/docs/comfyui.md) |
+| **Qwen3.8-Flash-Next (800K + Vision)** | `G4` | `llama-server` Bearer API Key | `https://qwen.example.com` | [docs/qwen-flash.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen-flash.md) |
+| **DeepSeek-V4.1-Flash Coder (Auto Max 1M + Vision)** | `G4` | `llama-server` Bearer API Key | `https://deepseek.example.com` | [docs/deepseek-coder.md](https://github.com/mustafamasa/colabllm/blob/english/docs/deepseek-coder.md) |
+| **Ollama** | `T4` | Caddy (Basic Auth + Bearer + `x-api-key`) | `https://ollama.example.com` | [docs/ollama.md](https://github.com/mustafamasa/colabllm/blob/english/docs/ollama.md) |
+| **Unsloth Studio** | `L4` | Yerleşik web girişi (`builtin`) | `https://unsloth-studio.example.com` | [docs/unsloth-studio.md](https://github.com/mustafamasa/colabllm/blob/english/docs/unsloth-studio.md) |
 
 ## Dizin yapısı
 
@@ -388,7 +389,7 @@ ssh -V
 ssh -o BatchMode=yes root@frpip 'id -u'
 ```
 
-`root@frpip` bir örnektir, gerçek SSH hedefiyle değiştirin; ilk bağlantıda sunucunun host parmak izini doğrulayın. Sunucuda Linux, systemd, Python 3 ve root ya da şifresiz sudo gerekir; mevcut FRP TOML yapılandırmasını okumak için sunucuda Python 3.11+ gerekir. Sunucu internete TCP 7000, 80 ve 443'ü açmalıdır. Yapılandırma komutu sunucudaki frps/Caddy'yi kurar veya yeniden kullanır, yerelde önceden kurmak gerekmez; ayrıntılar [FRP işlemleri](https://github.com/deluxebear/colabllm/blob/master/docs/frp.md) belgesinde.
+`root@frpip` bir örnektir, gerçek SSH hedefiyle değiştirin; ilk bağlantıda sunucunun host parmak izini doğrulayın. Sunucuda Linux, systemd, Python 3 ve root ya da şifresiz sudo gerekir; mevcut FRP TOML yapılandırmasını okumak için sunucuda Python 3.11+ gerekir. Sunucu internete TCP 7000, 80 ve 443'ü açmalıdır. Yapılandırma komutu sunucudaki frps/Caddy'yi kurar veya yeniden kullanır, yerelde önceden kurmak gerekmez; ayrıntılar [FRP işlemleri](https://github.com/mustafamasa/colabllm/blob/english/docs/frp.md) belgesinde.
 
 ### Başlatma öncesi kontrol
 
@@ -456,7 +457,7 @@ colabllm indextts up --quick-tunnel
 colabllm frp-config --disable
 ```
 
-FRP sunucusu varsayılan olarak TCP 7000, Caddy 80/443 kullanır; DNS yerel `cf` ile otomatik olarak DNS only ayarlanır. Yapılandırma, otomatik kurulum, kimlik doğrulama ve temizlik için [FRP işlemleri](https://github.com/deluxebear/colabllm/blob/master/docs/frp.md). Mevcut runtime'lar otomatik geçiş yapmaz.
+FRP sunucusu varsayılan olarak TCP 7000, Caddy 80/443 kullanır; DNS yerel `cf` ile otomatik olarak DNS only ayarlanır. Yapılandırma, otomatik kurulum, kimlik doğrulama ve temizlik için [FRP işlemleri](https://github.com/mustafamasa/colabllm/blob/english/docs/frp.md). Mevcut runtime'lar otomatik geçiş yapmaz.
 
 ## Sık kullanılan komutlar
 
@@ -529,7 +530,7 @@ colabllm <name> down --all
 5. Aynı değişiklikte `docs/<name>.md`'yi güncelleyin, `python tools/sync_runtime_docs.py` ile skill referansını üretin ve `skills/colabllm/SKILL.md` içindeki runtime dizinini başlatma, çağırma, girdi/çıktı, kimlik doğrulama ve görev kurtarmayı kapsayacak şekilde güncelleyin. Runtime eklemek, silmek veya komut davranışını değiştirmek kullanıcı skill'inin de güncellenmesini gerektirir.
 6. Skill örneklerinin gerçek CLI argümanlarıyla tutarlı olduğunu kontrol edin, dağıtım paketini derleyin ve kurulum, runtime keşfi ve skill dışa aktarımını `tools/check_distribution.py` ile doğrulayın; yeni dosya türü eklediyseniz paketleme kurallarını da güncelleyin. Ekleme, runtime ve kullanıcı skill'i kurulu paketten kullanılabildiğinde tamamlanmış sayılır.
 
-Ayrıntılı kurallar ve sorun giderme için [`.agents/skills/colab-llm-service/SKILL.md`](https://github.com/deluxebear/colabllm/blob/master/.agents/skills/colab-llm-service/SKILL.md).
+Ayrıntılı kurallar ve sorun giderme için [`.agents/skills/colab-llm-service/SKILL.md`](https://github.com/mustafamasa/colabllm/blob/english/.agents/skills/colab-llm-service/SKILL.md).
 
 ## Notebook'ları değiştirme
 
@@ -539,5 +540,5 @@ böylece yerelde birim testi yapılabilir; değiştirdikten sonra `python3 templ
 
 ## License
 
-Bu proje [MIT License](https://github.com/deluxebear/colabllm/blob/master/LICENSE) ile açık kaynaktır.
+Bu proje [MIT License](https://github.com/mustafamasa/colabllm/blob/english/LICENSE) ile açık kaynaktır.
 Runtime'ların indirdiği üçüncü taraf modeller, imajlar ve yazılımlar kendi lisans ve kullanım koşullarına tabidir; kullanmadan önce kendiniz kontrol edin.

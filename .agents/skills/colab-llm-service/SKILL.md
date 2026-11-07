@@ -55,14 +55,13 @@ Use `colabllm tunnel-config`, `colabllm frp-config`, and `colabllm frp-status` f
 Run `colabllm services` to discover runtimes and `colabllm <name> --help` for their commands.
 
 Install a distributed wheel with `uv tool install /path/to/colabllm-VERSION-py3-none-any.whl`.
-After publication, users can use `uv tool install colabllm` and `uv tool upgrade colabllm`.
+This fork is installed with `uv tool install git+https://github.com/mustafamasa/colabllm@english`; the `colabllm` PyPI name belongs to the upstream project.
 Developers use `uv tool install --editable .`; `uv build --no-sources` produces wheel and sdist.
 Run `python tools/check_distribution.py dist/colabllm-VERSION-py3-none-any.whl` to verify distribution.
 Release versions have one source, `pyproject.toml`, and use `MAJOR.MINOR.PATCH` with matching `v` tags.
 Before releasing, update `CHANGELOG.md` and run `python tools/check_release.py --tag vVERSION`.
-Pushing that tag invokes `release.yml`: the full CI matrix, package build/verification, GitHub Release,
-then PyPI Trusted Publishing through the `pypi` environment. PyPI's publisher must match repository
-`deluxebear/colabllm`, workflow `release.yml`, environment `pypi`. Retry failed jobs after configuration
+Pushing that tag invokes `release.yml`: the full CI matrix, package build/verification and a GitHub Release.
+The upstream PyPI job is removed in this fork. Retry failed jobs after configuration
 errors; never move a published tag or replace published packages. See README's release procedure.
 For actual local installation, inspect `command -v colabllm` and `uv tool list` first. Replace the
 old checkout symlink with `uv tool install --force /path/to/package.whl` when switching installation

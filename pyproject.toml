@@ -21,10 +21,11 @@ classifiers = [
 colabllm = "colabllm.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/deluxebear/colabllm"
-Repository = "https://github.com/deluxebear/colabllm"
-Issues = "https://github.com/deluxebear/colabllm/issues"
-Changelog = "https://github.com/deluxebear/colabllm/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/mustafamasa/colabllm"
+Upstream = "https://github.com/deluxebear/colabllm"
+Repository = "https://github.com/mustafamasa/colabllm"
+Issues = "https://github.com/mustafamasa/colabllm/issues"
+Changelog = "https://github.com/mustafamasa/colabllm/blob/english/CHANGELOG.md"
 
 [tool.setuptools]
 packages = ["colabllm"]
