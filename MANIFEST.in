@@ -2,7 +2,7 @@ include LICENSE
 include README.md
 include CHANGELOG.md
 include colabllm
-recursive-include src/colabllm *.py *.ipynb
+recursive-include src/colabllm *.py *.ipynb *.html *.css *.js *.svg
 recursive-include templates *.py *.ipynb *.js
 recursive-include tests *.py
 recursive-include tests_colab *.py

@@ -63,4 +63,4 @@ def stop_owned_process(pid, identity, *, group=False, timeout=5):
         while owned_process(pid, identity) and time.monotonic() < deadline:
             time.sleep(0.05)
     if owned_process(pid, identity):
-        raise RuntimeError(f'进程 {pid} 尚未退出，保留运行状态以便重试')
+        raise RuntimeError(f'Process {pid} has not exited yet; keeping the runtime state so the operation can be retried')

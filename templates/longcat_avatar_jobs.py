@@ -28,7 +28,7 @@ class JobQueue:
             try:
                 value = json.loads(path.read_text())
                 if value.get('status')=='running':
-                    value.update(status='queued', message='恢复中断的任务，将从最近检查点继续')
+                    value.update(status='queued', message='Resuming interrupted job from the latest checkpoint')
                     write_json(path,value)
             except (OSError, ValueError, KeyError, TypeError) as error:
                 print(f'Warning: skipping unreadable job status {path}: {error}', flush=True)
@@ -36,7 +36,7 @@ class JobQueue:
     def submit(self, request, audio, image=None):
         with self.lock:
             if self.draining:
-                raise ValueError('服务正在更新，请稍后提交新任务')
+                raise ValueError('The service is updating; submit new jobs later')
             job_id = time.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]
             folder = self.root/job_id
             folder.mkdir()
@@ -48,12 +48,12 @@ class JobQueue:
                 shutil.copy2(image,image_path)
                 request['image']=str(image_path)
             write_json(folder/'request.json',request)
-            write_json(folder/'status.json',dict(id=job_id,status='queued',message='已排队',created=time.time(),attempts=0))
+            write_json(folder/'status.json',dict(id=job_id,status='queued',message='Queued',created=time.time(),attempts=0))
             return job_id
 
     def get(self, job_id):
         if not job_id or Path(job_id).name!=job_id:
-            raise ValueError('任务编号无效')
+            raise ValueError('Invalid job ID')
         return json.loads((self.root/job_id/'status.json').read_text())
 
     def recent(self):
@@ -94,7 +94,7 @@ class JobQueue:
                     job_id=pending[0]
                     state=self.get(job_id)
                     self.active=job_id
-                    self.update(job_id,status='running',attempts=state['attempts']+1,message='正在生成')
+                    self.update(job_id,status='running',attempts=state['attempts']+1,message='Generating')
             if not job_id:
                 self.stop.wait(.5)
                 continue
@@ -102,7 +102,7 @@ class JobQueue:
                 folder=self.root/job_id
                 request=json.loads((folder/'request.json').read_text())
                 result=self.runner(job_id,folder,request,lambda **kw:self.update(job_id,**kw))
-                self.update(job_id,status='completed',message='生成完成',result=result)
+                self.update(job_id,status='completed',message='Generation complete',result=result)
             except Exception as error:
                 self.update(job_id,status='failed',message=str(error))
                 import traceback

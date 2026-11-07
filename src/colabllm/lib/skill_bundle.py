@@ -20,7 +20,7 @@ def bundle_root():
                     return root
     except PackageNotFoundError:
         pass
-    raise CliError('安装包缺少技能资源；请安装包含 skills 的新版 colabllm 分发包')
+    raise CliError('The installed package is missing the skill resources; install a newer colabllm distribution that includes skills')
 
 
 def export_skill(output):
@@ -28,13 +28,13 @@ def export_skill(output):
     parent = Path(output).expanduser().resolve()
     target = parent / 'colabllm'
     if target.exists() or target.is_symlink():
-        raise CliError(f'目标已存在，未覆盖：{target}；请导出到新目录后比较更新')
+        raise CliError(f'Target already exists, not overwritten: {target}; export to a new directory and compare before updating')
     parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.colabllm-skill-', dir=parent) as temporary:
         staged = Path(temporary) / 'colabllm'
         shutil.copytree(source, staged)
         # Recheck before rename; the exporter never merges with an existing skill.
         if target.exists() or target.is_symlink():
-            raise CliError(f'目标已存在，未覆盖：{target}')
+            raise CliError(f'Target already exists, not overwritten: {target}')
         staged.rename(target)
     return target

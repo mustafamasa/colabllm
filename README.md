@@ -1,30 +1,32 @@
-# Google Colab 大模型服务
+# Google Colab LLM Servisleri
 
-在 Google Colab GPU 上运行大模型服务，通过 Cloudflare Tunnel（默认）或 FRP + Caddy 提供公网访问。
-遵循 **“一个服务 = 一个 notebook (`src/colabllm/services/<name>.ipynb`) + 一个执行脚本 (`src/colabllm/services/<name>.py`)”** 的约定。
+Büyük model servislerini Google Colab GPU'larında çalıştırır ve Cloudflare Tunnel (varsayılan) ya da FRP + Caddy üzerinden internete açar.
+**"Bir servis = bir notebook (`src/colabllm/services/<name>.ipynb`) + bir çalıştırma betiği (`src/colabllm/services/<name>.py`)"** kuralına uyar.
 
-## 统一命令入口
+> Bu depo [deluxebear/colabllm](https://github.com/deluxebear/colabllm) projesinin çevrilmiş bir kopyasıdır: kod, CLI çıktıları, arayüz metinleri ve belgeler İngilizcedir; bu README Türkçedir.
 
-用户通过分发包安装，无需克隆源码。从 [GitHub Releases](https://github.com/deluxebear/colabllm/releases) 下载 wheel 后安装（私有仓库需要相应访问权限）：
+## Tek komut girişi
+
+Kullanıcılar dağıtım paketiyle kurar, kaynak kodu klonlamaya gerek yoktur. Wheel dosyasını [GitHub Releases](https://github.com/deluxebear/colabllm/releases) sayfasından indirip kurun (özel depo ise erişim izni gerekir):
 
 ```bash
 uv tool install ./colabllm-0.1.4-py3-none-any.whl
-# 如果命令目录尚未加入 PATH
+# Komut dizini henüz PATH'te değilse
 uv tool update-shell
 ```
 
-版本发布到 PyPI 后，也可以直接安装和升级：
+Sürümler PyPI'a yayınlandıktan sonra doğrudan oradan da kurulup güncellenebilir:
 
 ```bash
 uv tool install colabllm
 uv tool upgrade colabllm
 ```
 
-之后可以在任意目录使用 `colabllm <运行时名称> <命令> [参数...]`：
+Ardından herhangi bir dizinde `colabllm <runtime-adı> <komut> [argümanlar...]` kullanılabilir:
 
 ```bash
-colabllm services                       # 列出全部运行时
-colabllm unlimited-ocr up                # 默认 A100
+colabllm services                       # tüm runtime'ları listeler
+colabllm unlimited-ocr up                # varsayılan A100
 colabllm unlimited-ocr ocr ./documents -O ./results
 colabllm unlimited-ocr resume JOB_ID --wait
 colabllm qwen3-tts up -i 2
@@ -32,93 +34,93 @@ colabllm comfyui up
 colabllm ollama up --dry-run
 colabllm unlimited-ocr --help
 
-# 项目级配置也使用同一入口
+# Proje geneli yapılandırma da aynı girişi kullanır
 colabllm tunnel-config
 colabllm frp-config --help
 colabllm frp-status
 ```
 
-所有运行脚本和 notebook 都包含在安装包中。本地相对输入/输出路径按调用时所在目录解析。
-本项目的配置和运行状态统一写入 `~/.colabllm/`，不读取仓库旧 `.state/`，不提供旧配置迁移。
-可设置 `COLABLLM_HOME=/absolute/path` 使用独立目录。
+Tüm çalıştırma betikleri ve notebook'lar kurulum paketine dahildir. Yerel göreli girdi/çıktı yolları komutun çalıştırıldığı dizine göre çözülür.
+Projenin yapılandırması ve çalışma durumu `~/.colabllm/` altına yazılır; depodaki eski `.state/` okunmaz ve eski yapılandırma taşınmaz.
+Ayrı bir dizin kullanmak için `COLABLLM_HOME=/absolute/path` ayarlanabilir.
 
 ```text
 ~/.colabllm/
-├── tunnel-config.json           # 全局主域名与 FRP 设置
-├── services/<name>/state.json   # 实例凭据、会话、隧道与 runner PID
-├── services/<name>/run.log      # 日志；执行用 notebook 也在实例目录
-└── frp/<server-id>.json         # FRP 私密凭据
+├── tunnel-config.json           # global ana alan adı ve FRP ayarları
+├── services/<name>/state.json   # örnek kimlik bilgileri, oturum, tünel ve runner PID
+├── services/<name>/run.log      # log; çalıştırılan notebook da örnek dizinindedir
+└── frp/<server-id>.json         # FRP gizli kimlik bilgileri
 ```
 
-`colab`、`cf` 和 `ssh` 的授权/配置仍由各自工具管理；Google Drive 数据仍保存在远端。
-卸载使用 `uv tool uninstall colabllm`，用户配置目录保留。
-升级前先停止运行中的服务，升级后重新启动，避免后台 runner 依赖的安装文件被替换。
+`colab`, `cf` ve `ssh` için yetkilendirme/yapılandırma kendi araçlarında yönetilir; Google Drive verileri uzakta kalır.
+Kaldırmak için `uv tool uninstall colabllm`; kullanıcı yapılandırma dizini korunur.
+Güncellemeden önce çalışan servisleri durdurun, sonra yeniden başlatın; böylece arka plandaki runner'ın kullandığı kurulu dosyalar değiştirilmez.
 
-## 运行时使用指南
+## Runtime kullanım kılavuzları
 
-每个运行时的具体命令、API/UI 工作流、输入输出及恢复语义见下方“各运行时使用文档”表。
-共享规则集中在 [运行时通用操作](https://github.com/deluxebear/colabllm/blob/master/docs/runtime-common.md)，可先阅读以理解认证、Drive 路径、超时和多实例。
-`docs/<运行时>.md` 是用法说明的维护来源，用户技能内的对应参考由同步工具生成：
+Her runtime'ın komutları, API/arayüz akışları, girdi/çıktıları ve kurtarma davranışı aşağıdaki "Runtime kılavuzları" tablosundaki belgelerdedir.
+Ortak kurallar [Ortak runtime işlemleri](https://github.com/deluxebear/colabllm/blob/master/docs/runtime-common.md) belgesinde toplanmıştır; kimlik doğrulama, Drive yolları, zaman aşımları ve çoklu örnekleri anlamak için önce onu okuyun.
+Kullanım belgelerinin kaynağı `docs/<runtime>.md` dosyalarıdır; kullanıcı skill'indeki karşılıkları senkronizasyon aracıyla üretilir:
 
 ```bash
 python tools/sync_runtime_docs.py
 python tools/sync_runtime_docs.py --check
 ```
 
-修改用法或新增运行时后需同步；本地测试及 CI 会检查指南完整性、示例参数和技能内容一致。
+Kullanım değiştiğinde ya da yeni runtime eklendiğinde senkronize edin; yerel testler ve CI, kılavuzların eksiksizliğini, örnek argümanları ve skill içeriğinin tutarlılığını denetler.
 
-## 安装 Agent Skill
+## Agent Skill kurulumu
 
-根目录 [skills/colabllm](https://github.com/deluxebear/colabllm/blob/master/skills/colabllm/SKILL.md) 提供面向使用者的独立技能，覆盖本项目所有运行时。
-它包含按任务加载的 OCR、语音、推理、媒体和排错参考，不依赖源码仓库或个人部署配置。
+Kökteki [skills/colabllm](https://github.com/deluxebear/colabllm/blob/master/skills/colabllm/SKILL.md), bu projenin tüm runtime'larını kapsayan, kullanıcıya yönelik bağımsız bir skill sunar.
+Görev bazında yüklenen OCR, ses, çıkarım, medya ve sorun giderme referansları içerir; kaynak depoya veya kişisel kurulum ayarlarına bağlı değildir.
 
-wheel 和源码包均包含完整技能，安装 CLI 后即可导出：
+Wheel ve kaynak paketi skill'in tamamını içerir; CLI kurulduktan sonra dışa aktarılabilir:
 
 ```bash
-# 查看主技能说明
+# Ana skill açıklamasını göster
 colabllm skill
 
-# Codex：将完整 colabllm/ 技能目录导出到个人技能目录
+# Codex: colabllm/ skill dizininin tamamını kişisel skill dizinine aktar
 colabllm skill --output "${CODEX_HOME:-$HOME/.codex}/skills"
 
-# 支持 ~/.agents/skills 的 Agent
+# ~/.agents/skills destekleyen agent'lar
 colabllm skill --output ~/.agents/skills
 
-# 其他 Agent：指定其实际技能目录
+# Diğer agent'lar: gerçek skill dizinini belirtin
 colabllm skill --output /path/to/agent/skills
 ```
 
-`--output` 是技能父目录，实际生成 `<目录>/colabllm/SKILL.md` 和 `references/`。
-目标已存在时返回错误，不覆盖用户修改。更新时先导出到新目录，比较后替换；CLI 升级不会自动覆盖已安装的技能。
-也可以直接从源码复制整个 `skills/colabllm/` 目录。安装后按 Agent 的方式重新加载技能或开启新会话，
-再请求“使用 colabllm 将本地 PDF 转为 Markdown”等任务。
+`--output` skill'lerin üst dizinidir; asıl olarak `<dizin>/colabllm/SKILL.md` ve `references/` oluşturulur.
+Hedef zaten varsa hata verir, kullanıcı değişikliklerinin üzerine yazmaz. Güncellemek için önce yeni bir dizine aktarın, karşılaştırıp değiştirin; CLI güncellemesi kurulu skill'in üzerine otomatik yazmaz.
+`skills/colabllm/` dizininin tamamı kaynaktan doğrudan da kopyalanabilir. Kurduktan sonra agent'ınızın yöntemiyle skill'leri yeniden yükleyin ya da yeni bir oturum açın,
+ardından "colabllm ile yerel PDF'i Markdown'a çevir" gibi görevler isteyin.
 
-仓库内 `.agents/skills/colab-llm-service/` 是维护者技能；分发给使用者的是 `skills/colabllm/`。
+Depodaki `.agents/skills/colab-llm-service/` bakımcı skill'idir; kullanıcılara dağıtılan `skills/colabllm/`'dir.
 
-## 开发、构建与发布
+## Geliştirme, derleme ve yayınlama
 
 ```bash
-# 开发安装：修改源码立即生效，源码目录需要保留
+# Geliştirme kurulumu: kaynak değişiklikleri hemen geçerli olur, kaynak dizini yerinde kalmalı
 uv tool install --editable .
 
-# 普通本地安装 / 更新
+# Normal yerel kurulum / güncelleme
 uv tool install --force .
 
-# 构建 wheel 和源码分发包（dist/）
+# Wheel ve kaynak dağıtım paketini derle (dist/)
 uv build --no-sources
 
-# 验证 wheel 在隔离环境中的安装与运行
+# Wheel'in izole ortamda kurulup çalıştığını doğrula
 python tools/check_distribution.py dist/colabllm-0.1.4-py3-none-any.whl
 ```
 
-版本号以 `pyproject.toml` 为唯一来源，CLI 从已安装包元数据读取版本。
-采用 `MAJOR.MINOR.PATCH`：修复递增 PATCH、新功能递增 MINOR、不兼容变更递增 MAJOR；
-在 `0.x` 开发阶段，不兼容变更递增 MINOR，并在 [CHANGELOG.md](https://github.com/deluxebear/colabllm/blob/master/CHANGELOG.md) 中说明。
-当前版本为 `0.1.4`，对应 Git 标签 `v0.1.4`（`0.1.0` 已撤回）；后续发布示例：
+Sürüm numarasının tek kaynağı `pyproject.toml`'dur; CLI sürümü kurulu paketin meta verisinden okur.
+`MAJOR.MINOR.PATCH` kullanılır: düzeltmeler PATCH'i, yeni özellikler MINOR'u, uyumsuz değişiklikler MAJOR'u artırır;
+`0.x` geliştirme aşamasında uyumsuz değişiklikler MINOR'u artırır ve [CHANGELOG.md](https://github.com/deluxebear/colabllm/blob/master/CHANGELOG.md) içinde açıklanır.
+Güncel sürüm `0.1.4`, Git etiketi `v0.1.4`'tür (`0.1.0` geri çekildi); sonraki bir yayın örneği:
 
 ```bash
 uv version --bump patch
-# 将 CHANGELOG.md 的 Unreleased 内容整理到本次版本的日期条目
+# CHANGELOG.md içindeki Unreleased bölümünü bu sürümün tarihli girdisine taşı
 python tools/check_release.py --tag v0.1.5
 git add pyproject.toml CHANGELOG.md
 git commit -m "chore: release 0.1.5"
@@ -127,121 +129,136 @@ git push origin master
 git push origin v0.1.5
 ```
 
-推送 `v*` 标签触发 [release.yml](https://github.com/deluxebear/colabllm/blob/master/.github/workflows/release.yml)：
+`v*` etiketinin gönderilmesi [release.yml](https://github.com/deluxebear/colabllm/blob/master/.github/workflows/release.yml) iş akışını tetikler:
 
-1. 验证标签、包版本和变更记录一致，复用 Linux/macOS × Python 3.12–3.14 CI。
-2. 构建 wheel 和 sdist，验证隔离安装，生成 SHA256SUMS 并保存 Actions artifact。
-3. 发布 GitHub Release，附带安装包及校验文件，发布说明取自当前版本的 CHANGELOG 条目。
-4. 将同一组已验证的包通过 Trusted Publishing 上传 PyPI。
+1. Etiket, paket sürümü ve değişiklik kaydının tutarlılığını doğrular; Linux/macOS × Python 3.12–3.14 CI'ını yeniden kullanır.
+2. Wheel ve sdist'i derler, izole kurulumu doğrular, SHA256SUMS üretir ve Actions artifact olarak saklar.
+3. Kurulum paketleri ve sağlama dosyalarıyla bir GitHub Release yayınlar; sürüm notları güncel sürümün CHANGELOG girdisinden alınır.
+4. Doğrulanmış aynı paketleri Trusted Publishing ile PyPI'a yükler.
 
-首次启用 PyPI 需要项目所有者在 [PyPI Publishing](https://pypi.org/manage/account/publishing/)
-添加 Pending Publisher：项目 `colabllm`、Owner `deluxebear`、Repository `colabllm`、
-Workflow `release.yml`、Environment `pypi`。已有 PyPI 项目则在项目 Publishing 设置添加同样的发布者。
-Actions 使用 `pypi` environment 和 OIDC，无需配置长期 PyPI API Token。
-参考 [PyPI Trusted Publisher 说明](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)。
+PyPI'ı ilk kez etkinleştirmek için proje sahibinin [PyPI Publishing](https://pypi.org/manage/account/publishing/) sayfasında
+bir Pending Publisher eklemesi gerekir: proje `colabllm`, Owner `deluxebear`, Repository `colabllm`,
+Workflow `release.yml`, Environment `pypi`. PyPI projesi zaten varsa aynı yayıncı projenin Publishing ayarlarına eklenir.
+Actions, `pypi` environment ve OIDC kullanır; uzun ömürlü bir PyPI API token'ı gerekmez.
+Bkz. [PyPI Trusted Publisher açıklaması](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/).
 
-PyPI 上传失败时，GitHub Release 仍可下载；修复身份配置后在 Actions 选择 **Re-run failed jobs**。
-也可以针对已有标签手动运行 release workflow；已发布的 GitHub Release 会拒绝被覆盖，应优先只重跑失败任务。
-已发布版本不移动标签或替换安装包，修复后发布新版本。
-通过本地 wheel 安装的用户可安装新 wheel 更新；通过 PyPI 安装的用户使用 `uv tool upgrade colabllm`。
+PyPI yüklemesi başarısız olsa da GitHub Release indirilebilir; kimlik ayarını düzelttikten sonra Actions'ta **Re-run failed jobs** seçin.
+Mevcut bir etiket için release iş akışı elle de çalıştırılabilir; yayınlanmış bir GitHub Release'in üzerine yazılamaz, bu yüzden önce yalnızca başarısız işleri yeniden çalıştırın.
+Yayınlanmış sürümlerde etiket taşınmaz ve paketler değiştirilmez; düzeltmeden sonra yeni sürüm yayınlanır.
+Yerel wheel ile kuranlar yeni wheel'i kurarak güncelleyebilir; PyPI ile kuranlar `uv tool upgrade colabllm` kullanır.
 
-## CLI 行为约定
+## CLI davranış kuralları
 
-- `colabllm <服务> --help` 列出生命周期和服务专用命令；`colabllm help <服务> <命令>` 查看详细帮助。
-- `-i/--instance` 可放在服务参数的任意位置，`--` 之后按字面解析；实例 ID 必须为 1–64 位字母、数字、下划线或连字符，且不能以连字符开头。
-- 普通结果写入 stdout，进度和告警写入 stderr；`--json` 的 stdout 只包含 JSON。
-- `info`、`ps`、`list`、`status` 支持 `--json`，默认隐藏凭据；需要时显式加 `--show-secrets`。
-- `--quiet` 抑制诊断进度，错误仍然显示；`--no-color` 或 `NO_COLOR` 关闭诊断颜色。非终端输出自动关闭诊断颜色。
-- 常见网络、文件和配置错误默认给出简洁提示；`--debug` 显示异常堆栈。
-- 成功退出码为 0；操作失败为非零，参数用法错误为 2；外部 Colab 命令失败时保留其正退出码；Ctrl+C 为 130。
-- 就绪标记只接受完整的 `CT_READY` 协议行；日志中的普通文字提及不会被视为就绪。
-- `up` 默认等待 `CT_READY`；等待超时返回失败，但后台 runner 保留。`up --detach` 仅启动后台 runner，立即返回；`up --foreground` 在当前终端保持连接。
-- 同一实例的启动和停止互斥；状态事务使用文件锁和原子替换。前台/后台 runner 都记录进程启动身份，停止前校验身份并等待退出。
-- `down` 先确认远端停止成功，再停止本地连接并清理运行状态；远端停止失败时保留连接和追踪信息，便于重试。
-- 携带认证信息的 HTTP 请求拒绝跨来源重定向。`--url` 或服务 URL 环境变量切换来源时，需要显式提供 Token，不能自动借用原服务的凭据。来源按协议、主机和有效端口比较。
+- `colabllm <servis> --help` yaşam döngüsü ve servise özel komutları listeler; ayrıntılı yardım için `colabllm help <servis> <komut>`.
+- `-i/--instance` servis argümanlarının herhangi bir yerine yazılabilir, `--` sonrası olduğu gibi yorumlanır; örnek kimliği 1–64 karakterlik harf, rakam, alt çizgi veya tireden oluşmalı ve tireyle başlamamalıdır.
+- Normal sonuçlar stdout'a, ilerleme ve uyarılar stderr'e yazılır; `--json` ile stdout yalnızca JSON içerir.
+- `info`, `ps`, `list`, `status` `--json` destekler ve kimlik bilgilerini varsayılan olarak gizler; gerektiğinde açıkça `--show-secrets` ekleyin.
+- `--quiet` tanılama ilerlemesini bastırır, hatalar yine gösterilir; `--no-color` veya `NO_COLOR` tanılama renklerini kapatır. Terminal olmayan çıktıda renkler otomatik kapanır.
+- Yaygın ağ, dosya ve yapılandırma hataları varsayılan olarak kısa ipuçlarıyla gösterilir; `--debug` istisna yığınını gösterir.
+- Başarıda çıkış kodu 0; işlem hatasında sıfırdan farklı, argüman kullanım hatasında 2; dış Colab komutu başarısız olursa onun pozitif çıkış kodu korunur; Ctrl+C 130.
+- Hazır işareti olarak yalnızca tam bir `CT_READY` protokol satırı kabul edilir; loglarda geçen sıradan metinler hazır sayılmaz.
+- `up` varsayılan olarak `CT_READY` bekler; bekleme zaman aşımına uğrarsa hata döner ama arka plandaki runner kalır. `up --detach` yalnızca arka plan runner'ını başlatıp hemen döner; `up --foreground` bağlantıyı mevcut terminalde tutar.
+- Aynı örnek için başlatma ve durdurma birbirini dışlar; durum işlemleri dosya kilidi ve atomik değiştirme kullanır. Ön plan/arka plan runner'ları süreç başlangıç kimliğini kaydeder, durdurmadan önce kimliği doğrular ve çıkışı bekler.
+- `down` önce uzaktaki durdurmanın başarılı olduğunu doğrular, sonra yerel bağlantıyı durdurup çalışma durumunu temizler; uzaktaki durdurma başarısız olursa yeniden deneme için bağlantı ve takip bilgileri korunur.
+- Kimlik bilgisi taşıyan HTTP istekleri farklı kökene yönlendirmeyi reddeder. `--url` veya servis URL ortam değişkeniyle köken değiştirildiğinde token'ın açıkça verilmesi gerekir; asıl servisin kimlik bilgileri otomatik ödünç alınmaz. Köken; şema, ana makine ve geçerli porta göre karşılaştırılır.
 
-## 超时与环境诊断
+## Web kontrol paneli
 
 ```bash
-# 外部命令上限：可放在服务名前后，也可设置 COLABLLM_COMMAND_TIMEOUT
+colabllm ui                 # tarayıcıda açar; varsayılan port 8765
+colabllm ui --port 0 --no-browser
+```
+
+Yalnızca `127.0.0.1` üzerinde dinler ve her başlatmada yeni bir erişim token'ı üretir; terminalde yazdırılan bağlantıyı kullanın.
+Panel; compute unit bakiyesi ve harcama hızı, tüm örneklerin durumu/GPU'su/URL'si/çalışma süresi, servis kataloğu, `doctor` denetimleri, `run.log` ve gizlenmiş kimlik bilgilerini gösterir.
+Başlatma ve durdurma CLI ile aynı servis betiklerini (`up --detach`, `down`) çalıştırır; kilitler ve hazır olma denetimleri değişmez.
+Başlatma penceresi her servisin kendi `up` seçeneklerini (ör. comfyui `--workflow`, ollama `--models`) CLI ayrıştırıcısından okur ve göndermeden önce aynı ayrıştırıcıyla doğrular.
+Örnekler listesinde birden fazla örnek seçilip birlikte, ya da tüm çalışan örnekler tek seferde durdurulabilir; her biri ayrı bir `down` işlemi olarak izlenir.
+Durmuş örnekler panelden (tek tek ya da seçerek) silinebilir; bu, `colabllm <runtime> purge` komutunu çalıştırır: önce `colab stop` ile arta kalan oturum kapatılır, sonra yerel kayıt (kimlik bilgileri, `run.log`, notebook kopyası) silinir. Drive verilerine dokunulmaz.
+Paneli kapatmak (Ctrl+C) çalışan servisleri etkilemez.
+
+## Zaman aşımları ve ortam tanılama
+
+```bash
+# Dış komut üst sınırı: servis adından önce veya sonra yazılabilir, COLABLLM_COMMAND_TIMEOUT ile de ayarlanabilir
 colabllm --command-timeout 60 ollama status
 
-# 默认模式超时只停止等待，后台 runner 保留；前台模式超时会断开本地连接
+# Varsayılan modda zaman aşımı yalnızca beklemeyi durdurur, arka plan runner'ı kalır; ön plan modunda yerel bağlantı kesilir
 colabllm ollama up --ready-timeout 600
 colabllm ollama up --foreground --ready-timeout 600
 
-# 轮询等待上限：0 保留不限时行为；每次请求也会受剩余时间约束
+# Yoklama bekleme sınırı: 0 sınırsız bekler; her istek de kalan süreyle sınırlanır
 colabllm unlimited-ocr job JOB_ID --wait --timeout 300
 colabllm comfyui pull-workflow TEMPLATE --timeout 300 --poll 2
 colabllm longcat-avatar job JOB_ID --wait --timeout 300
 
-# 默认只检查本机依赖、Drive 扩展、授权文件存在性和用户配置
+# Varsayılan olarak yalnızca yerel bağımlılıkları, Drive eklentisini, yetki dosyalarının varlığını ve kullanıcı yapılandırmasını denetler
 colabllm doctor
 colabllm doctor --json --transport quick --no-drive
 
-# 额外验证 Colab、Cloudflare、SSH 授权，按选中的后端执行限时只读检查
+# Ek olarak Colab, Cloudflare ve SSH yetkilerini seçilen arka uca göre süre sınırlı, salt okunur şekilde doğrular
 colabllm doctor --online --timeout 10
 ```
 
-超时退出码为 `124`。长驻的 `colab exec` 保活连接不受通用外部命令上限影响。
-未指定 `--command-timeout` 时，共享外部命令默认 300 秒，个别下载或 SSH 操作保留专属默认上限。
-`doctor` 不创建 GPU 会话、不挂载 Drive、不修改隧道，也不显示凭据或外部命令的原始输出。
-离线检查不会证明授权仍有效；需要时使用 `--online`，该模式禁用浏览器交互并限制每项检查时间。
+Zaman aşımı çıkış kodu `124`'tür. Uzun süreli `colab exec` canlı tutma bağlantısı genel dış komut sınırından etkilenmez.
+`--command-timeout` verilmezse ortak dış komutlar için varsayılan 300 saniyedir; bazı indirme veya SSH işlemlerinin kendi varsayılan sınırları vardır.
+`doctor` GPU oturumu oluşturmaz, Drive bağlamaz, tünelleri değiştirmez ve kimlik bilgilerini ya da dış komutların ham çıktısını göstermez.
+Çevrimdışı denetim yetkilerin hâlâ geçerli olduğunu kanıtlamaz; gerektiğinde `--online` kullanın, bu mod tarayıcı etkileşimini kapatır ve her denetimi süreyle sınırlar.
 
-## Shell 补全
+## Shell tamamlama
 
-命令、选项和枚举值来自实际解析器；实例 ID 从 `~/.colabllm/services/` 的目录名读取，补全过程不读取凭据、不联网。
+Komutlar, seçenekler ve sabit değerler gerçek ayrıştırıcıdan gelir; örnek kimlikleri `~/.colabllm/services/` altındaki dizin adlarından okunur, tamamlama sırasında kimlik bilgisi okunmaz ve ağa çıkılmaz.
 
 ```bash
-# Bash：在当前 Shell 加载
+# Bash: mevcut shell'e yükle
 source <(colabllm completion bash)
 
-# Zsh：先启用补全系统，再加载
+# Zsh: önce tamamlama sistemini etkinleştirin, sonra yükleyin
 # autoload -Uz compinit && compinit
 source <(colabllm completion zsh)
 ```
 
-Fish 中执行 `colabllm completion fish | source`。需要持久启用时，将相应加载命令加入自己的 Shell 初始化文件，
-或将脚本保存在 `~/.colabllm/completions/` 后从初始化文件加载。
+Fish'te `colabllm completion fish | source` çalıştırın. Kalıcı etkinleştirmek için ilgili yükleme komutunu kendi shell başlangıç dosyanıza ekleyin
+ya da betiği `~/.colabllm/completions/` altına kaydedip başlangıç dosyasından yükleyin.
 
-## 测试
+## Testler
 
-本地 CLI 与控制逻辑使用 Python 标准库，默认测试无需 Torch、NumPy 或 GPU：
+Yerel CLI ve kontrol mantığı yalnızca Python standart kütüphanesini kullanır; varsayılan testler Torch, NumPy veya GPU gerektirmez:
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-`tests_colab/` 单独保存 Colab 端模型代码的回归测试（如 LongCat attention 和音频分段）。
-它们会导入模型运行代码，仅在对应的 Colab 服务环境中运行；attention 测试还需要 CUDA 和上游 LongCat 源码。
-在该环境中，将项目源码放入 VM 后执行：
+`tests_colab/`, Colab tarafındaki model kodunun regresyon testlerini ayrıca saklar (ör. LongCat attention ve ses bölütleme).
+Bunlar model çalışma kodunu içe aktarır ve yalnızca ilgili Colab servis ortamında çalışır; attention testleri ayrıca CUDA ve upstream LongCat kaynağını gerektirir.
+O ortamda proje kaynağını VM'e koyduktan sonra şunu çalıştırın:
 
 ```bash
-# LongCat-Video VM 使用 /content/longcat-video/repo；Avatar VM 使用 /content/longcat-avatar/repo
+# LongCat-Video VM'i /content/longcat-video/repo, Avatar VM'i /content/longcat-avatar/repo kullanır
 PYTHONPATH=/content/longcat-video/repo python -m unittest discover -s tests_colab
 ```
 
-GitHub Actions 在 Linux/macOS、Python 3.12/3.13/3.14 上运行本地测试、三种 Shell 补全测试、构建和隔离 wheel 安装验证。工作流不执行模型测试、不启动 Colab、不自动发布包。
+GitHub Actions; Linux/macOS ve Python 3.12/3.13/3.14 üzerinde yerel testleri, üç shell tamamlama testini, derlemeyi ve izole wheel kurulum doğrulamasını çalıştırır. İş akışı model testi çalıştırmaz, Colab başlatmaz ve paketleri otomatik yayınlamaz.
 
-本地缺少 Zsh/Fish 时跳过对应 Shell 集成测试；CI 会安装这些 Shell。
-本地测试中的真实 FRP 集成测试需额外指定 `COLABSVC_FRP_TEST_BIN`，默认跳过。
+Yerelde Zsh/Fish yoksa ilgili shell entegrasyon testleri atlanır; CI bu shell'leri kurar.
+Yerel testlerdeki gerçek FRP entegrasyon testi için ayrıca `COLABSVC_FRP_TEST_BIN` verilmelidir, aksi halde atlanır.
 
-## 架构与职责
+## Mimari ve sorumluluklar
 
-| 阶段 / 职责 | 执行位置 | 说明 |
+| Aşama / sorumluluk | Çalıştığı yer | Açıklama |
 | --- | --- | --- |
-| 创建/复用 Colab 会话 (`colab new`) | 本地脚本 `src/colabllm/services/<name>.py` | 会话名与服务名一致 |
-| 免浏览器挂载网盘 (`colab dfs mount`) | 本地脚本 `src/colabllm/services/<name>.py` | 挂载到 `/content/drive`；自动跳过 notebook 里的 `drive.mount()` |
-| Cloudflare 固定域名 | 本地脚本 (`cf` CLI) | 创建/复用 named tunnel、配置 ingress 和 DNS CNAME；未配置主域名时使用动态 URL |
-| FRP 固定域名 | 本地脚本 (`ssh` + `cf` CLI) | SSH 安装或复用服务端 frps/Caddy，通过 Cloudflare DNS 将域名指向服务器 IP |
-| 密钥生成与注入 | 本地脚本 -> `--env` | 自动生成账号密码与 Bearer Token，保存在 `~/.colabllm/services/<name>/state.json` (0600) |
-| 安装与启动服务 | 远端 `src/colabllm/services/<name>.ipynb` | 幂等安装，服务仅监听 `127.0.0.1` |
-| 安全认证层 (Caddy) | 远端 `src/colabllm/services/<name>.ipynb` | 对无自带认证的服务（如 Ollama）前置 Caddy：浏览器走 Basic Auth，API 走 `Authorization: Bearer <token>` |
-| 启动 `cloudflared` / `frpc` 与保活 | 远端 `src/colabllm/services/<name>.ipynb` | 最后一个 cell 持续阻塞并监控子进程；本地后台进程保持 `colab exec` 连接以防 Colab 回收会话 |
+| Colab oturumu oluşturma/yeniden kullanma (`colab new`) | Yerel betik `src/colabllm/services/<name>.py` | Oturum adı servis adıyla aynıdır |
+| Tarayıcısız Drive bağlama (`colab dfs mount`) | Yerel betik `src/colabllm/services/<name>.py` | `/content/drive`'a bağlar; notebook'taki `drive.mount()` otomatik atlanır |
+| Cloudflare sabit alan adı | Yerel betik (`cf` CLI) | Named tunnel oluşturur/yeniden kullanır, ingress ve DNS CNAME ayarlar; ana alan adı yoksa dinamik URL kullanılır |
+| FRP sabit alan adı | Yerel betik (`ssh` + `cf` CLI) | Sunucu tarafında frps/Caddy'yi SSH ile kurar veya yeniden kullanır, Cloudflare DNS ile alan adını sunucu IP'sine yönlendirir |
+| Anahtar üretme ve aktarma | Yerel betik -> `--env` | Kullanıcı adı/şifre ve Bearer token'ı otomatik üretir, `~/.colabllm/services/<name>/state.json` (0600) içinde saklar |
+| Servisi kurma ve başlatma | Uzak `src/colabllm/services/<name>.ipynb` | Tekrarlanabilir kurulum; servis yalnızca `127.0.0.1` üzerinde dinler |
+| Güvenlik katmanı (Caddy) | Uzak `src/colabllm/services/<name>.ipynb` | Kendi kimlik doğrulaması olmayan servislerin (ör. Ollama) önüne Caddy konur: tarayıcı Basic Auth, API `Authorization: Bearer <token>` kullanır |
+| `cloudflared` / `frpc` başlatma ve canlı tutma | Uzak `src/colabllm/services/<name>.ipynb` | Son hücre sürekli bloklar ve alt süreçleri izler; yerel arka plan süreci, Colab'ın oturumu geri almaması için `colab exec` bağlantısını açık tutar |
 
-## 各运行时使用文档
+## Runtime kılavuzları
 
-| 服务名称 | 默认 GPU | 认证方式 | 固定域名示例（主域名配置为 `example.com`） | 详细使用说明 |
+| Servis | Varsayılan GPU | Kimlik doğrulama | Sabit alan adı örneği (ana alan adı `example.com` ise) | Ayrıntılı kılavuz |
 | --- | --- | --- | --- | --- |
 | **NVIDIA-Nemotron-3.5-Transcribe-30B-A4B** | `G4` | `vLLM` Bearer API Key (`builtin`) | `https://transcribe.example.com` | [docs/nemotron-transcribe.md](https://github.com/deluxebear/colabllm/blob/master/docs/nemotron-transcribe.md) |
 | **Qwen3-TTS** | `L4` | Bearer API Key (`builtin`) | `https://qwen3-tts.example.com` | [docs/qwen3-tts.md](https://github.com/deluxebear/colabllm/blob/master/docs/qwen3-tts.md) |
@@ -256,98 +273,98 @@ GitHub Actions 在 Linux/macOS、Python 3.12/3.13/3.14 上运行本地测试、�
 | **Qwen3.8-Flash-Next (800K + Vision)** | `G4` | `llama-server` Bearer API Key | `https://qwen.example.com` | [docs/qwen-flash.md](https://github.com/deluxebear/colabllm/blob/master/docs/qwen-flash.md) |
 | **DeepSeek-V4.1-Flash Coder (Auto Max 1M + Vision)** | `G4` | `llama-server` Bearer API Key | `https://deepseek.example.com` | [docs/deepseek-coder.md](https://github.com/deluxebear/colabllm/blob/master/docs/deepseek-coder.md) |
 | **Ollama** | `T4` | Caddy (Basic Auth + Bearer + `x-api-key`) | `https://ollama.example.com` | [docs/ollama.md](https://github.com/deluxebear/colabllm/blob/master/docs/ollama.md) |
-| **Unsloth Studio** | `L4` | 内置 Web 登录 (`builtin`) | `https://unsloth-studio.example.com` | [docs/unsloth-studio.md](https://github.com/deluxebear/colabllm/blob/master/docs/unsloth-studio.md) |
+| **Unsloth Studio** | `L4` | Yerleşik web girişi (`builtin`) | `https://unsloth-studio.example.com` | [docs/unsloth-studio.md](https://github.com/deluxebear/colabllm/blob/master/docs/unsloth-studio.md) |
 
-## 目录结构
+## Dizin yapısı
 
 ```text
-LICENSE                        # MIT 开源许可证
-pyproject.toml                 # 包元数据、版本、colabllm 命令入口
+LICENSE                        # MIT açık kaynak lisansı
+pyproject.toml                 # paket meta verisi, sürüm, colabllm komut girişi
 src/colabllm/
-├── cli.py                     # 统一命令分发
-├── control.py                 # 全局域名与 FRP 管理
-├── utility.py                 # 通用工具子命令
-├── lib/                       # 本地共享 runner、状态、HTTP/音频工具与 FRP 实现
-└── services/                  # <name>.py + <name>.ipynb；随包安装
-templates/                     # notebook 生成器 build_notebooks.py 与嵌入 notebook 的独立模块
-docs/                          # 各运行时与 FRP/通用操作文档
-skills/colabllm/               # 随包分发的用户 Agent Skill（references 由 docs 同步生成）
-tools/                         # 文档同步、分发包校验、基准测试等开发工具
-tests/                         # 本地测试（Python 标准库）
-tests_colab/                   # 仅在 Colab 模型环境运行的回归测试
+├── cli.py                     # ortak komut yönlendirme
+├── control.py                 # global alan adı ve FRP yönetimi
+├── utility.py                 # genel yardımcı alt komutlar
+├── lib/                       # yerel ortak runner, durum, HTTP/ses araçları ve FRP uygulaması
+└── services/                  # <name>.py + <name>.ipynb; paketle birlikte kurulur
+templates/                     # notebook üreticisi build_notebooks.py ve notebook'lara gömülen bağımsız modüller
+docs/                          # runtime'lar ve FRP/ortak işlemler belgeleri
+skills/colabllm/               # paketle dağıtılan kullanıcı Agent Skill'i (references, docs'tan senkronize üretilir)
+tools/                         # belge senkronizasyonu, paket doğrulama, kıyaslama gibi geliştirme araçları
+tests/                         # yerel testler (Python standart kütüphanesi)
+tests_colab/                   # yalnızca Colab model ortamında çalışan regresyon testleri
 ```
 
-## 本地环境与前置准备
+## Yerel ortam ve ön hazırlık
 
-本机负责创建 Colab 会话、配置隧道、挂载网盘和维持后台连接；模型在远端运行，**本机无需 GPU、CUDA、PyTorch 或模型权重**。
+Yerel makine Colab oturumlarını oluşturur, tünelleri yapılandırır, Drive'ı bağlar ve arka plan bağlantısını sürdürür; modeller uzakta çalışır, **yerelde GPU, CUDA, PyTorch veya model ağırlıkları gerekmez**.
 
-### 必需与可选依赖
+### Zorunlu ve isteğe bağlı bağımlılıklar
 
-| 本机环境 / 工具 | 何时需要 | 说明 |
+| Yerel ortam / araç | Ne zaman gerekir | Açıklama |
 | --- | --- | --- |
-| Linux 或 macOS | 必需 | Colab CLI 当前支持的平台；本项目后台进程管理也使用 Unix 进程组 |
-| Python 3.12+ | 必需 | 执行 `src/colabllm/services/*.py`、`src/colabllm/control.py`，满足 `google-colab-cli` 的 Python 要求 |
-| `uv` | 包安装与升级 | 隔离安装 colabllm 和 Colab CLI；Git 仅开发时需要 |
-| `colab` CLI | 必需 | PyPI 包 `google-colab-cli`，用于会话、文件操作及执行 Notebook |
-| `colab dfs` 扩展 | 默认网盘流程必需 | [colab-dfs-ext](https://github.com/deluxebear/colab-dfs-ext)，提供 `consent`、`mount`、`doctor`；需单独安装 |
-| Node.js、npm、Cloudflare `cf` CLI | 固定域名或 FRP 模式 | 本机调用 Cloudflare API 管理 DNS；Cloudflare named tunnel 也由它配置。Quick Tunnel 不需要它 |
-| OpenSSH 客户端 `ssh` | FRP 模式；或 Colab SSH 排错 | 用于连接 FRP 服务器，复用 `~/.ssh/config` 的密钥、端口和跳板配置 |
+| Linux veya macOS | Zorunlu | Colab CLI'ın şu an desteklediği platformlar; bu projenin arka plan süreç yönetimi de Unix süreç gruplarını kullanır |
+| Python 3.12+ | Zorunlu | `src/colabllm/services/*.py` ve `src/colabllm/control.py`'yi çalıştırır, `google-colab-cli`'ın Python gereksinimini karşılar |
+| `uv` | Paket kurulumu ve güncelleme | colabllm ve Colab CLI'ı izole kurar; Git yalnızca geliştirme için gerekir |
+| `colab` CLI | Zorunlu | PyPI paketi `google-colab-cli`; oturumlar, dosya işlemleri ve notebook çalıştırma için |
+| `colab dfs` eklentisi | Varsayılan Drive akışı için zorunlu | [colab-dfs-ext](https://github.com/deluxebear/colab-dfs-ext); `consent`, `mount`, `doctor` sağlar; ayrıca kurulmalıdır |
+| Node.js, npm, Cloudflare `cf` CLI | Sabit alan adı veya FRP modu | Yerelden Cloudflare API ile DNS yönetir; Cloudflare named tunnel da bununla yapılandırılır. Quick Tunnel için gerekmez |
+| OpenSSH istemcisi `ssh` | FRP modu veya Colab SSH sorun giderme | FRP sunucusuna bağlanır; `~/.ssh/config` içindeki anahtar, port ve atlama ayarlarını kullanır |
 
-准备可使用所需 GPU 运行时的 Google/Colab 账号，以及有可用空间的 Google Drive。GPU 配额、计算单元余额和机型可用性以账号当前状态为准。首次 Google、Drive 和 Cloudflare 授权需要浏览器完成。
+Gereken GPU runtime'larını kullanabilen bir Google/Colab hesabı ve boş alanı olan bir Google Drive hazırlayın. GPU kotası, compute unit bakiyesi ve makine tipi uygunluğu hesabın güncel durumuna bağlıdır. İlk Google, Drive ve Cloudflare yetkilendirmesi tarayıcıda yapılır.
 
-### 1. 安装 Colab CLI
+### 1. Colab CLI kurulumu
 
-先按 [uv 官方说明](https://docs.astral.sh/uv/getting-started/installation/) 安装 `uv`，并准备 Python 3.12+。使用独立工具环境安装：
+Önce [uv resmi talimatlarına](https://docs.astral.sh/uv/getting-started/installation/) göre `uv`'yi kurun ve Python 3.12+ hazırlayın. Bağımsız bir araç ortamında kurun:
 
 ```bash
 uv tool install google-colab-cli
 uv tool update-shell
-# 重新打开终端，或按 update-shell 的提示加载 PATH
+# Terminali yeniden açın ya da update-shell'in söylediği şekilde PATH'i yükleyin
 colab version
 colab --help
 ```
 
-安装来源：[google-colab-cli](https://github.com/googlecolab/google-colab-cli)。首次运行 `colab sessions` 时，按 CLI 的提示完成 Google 认证；需要自行提供 OAuth 客户端配置的环境，应按上游说明放在默认的 `~/.colab-cli-oauth-config.json`。本项目后台调用 `colab`，因此应先在同一用户环境中完成授权。
+Kaynak: [google-colab-cli](https://github.com/googlecolab/google-colab-cli). `colab sessions` ilk çalıştırıldığında CLI'ın yönlendirmesiyle Google kimlik doğrulamasını tamamlayın; kendi OAuth istemci yapılandırmasını vermesi gereken ortamlarda dosya, upstream talimatlarına göre varsayılan `~/.colab-cli-oauth-config.json` konumuna konmalıdır. Bu proje `colab`'ı arka planda çağırdığı için yetkilendirme önceden aynı kullanıcı ortamında yapılmalıdır.
 
 ```bash
-colab sessions       # 确认可访问 Colab；不创建新 VM
-colab usage          # 查看账号计算单元用量/余额
+colab sessions       # Colab erişimini doğrular; yeni VM oluşturmaz
+colab usage          # hesabın compute unit kullanımı/bakiyesi
 ```
 
-### 2. 安装并授权 `colab dfs` 扩展
+### 2. `colab dfs` eklentisinin kurulumu ve yetkilendirilmesi
 
-本项目启动时默认调用 `colab dfs mount`，不依赖 Notebook 内交互式的 `drive.mount()`。扩展来自 [deluxebear/colab-dfs-ext](https://github.com/deluxebear/colab-dfs-ext)，需在安装 Colab CLI 后单独安装：
+Bu proje başlatma sırasında varsayılan olarak `colab dfs mount` çağırır, notebook içindeki etkileşimli `drive.mount()`'a dayanmaz. Eklenti [deluxebear/colab-dfs-ext](https://github.com/deluxebear/colab-dfs-ext) deposundandır ve Colab CLI'dan sonra ayrıca kurulmalıdır:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/deluxebear/colab-dfs-ext/main/install.sh | sh
 ```
 
-也可以克隆扩展仓库后运行 `python3 install.py`。安装器将源码保存到 `~/.colab-dfs-ext/`，并自动接入提供 `colab` 命令的 Python 环境；详细选项见[扩展中文说明](https://github.com/deluxebear/colab-dfs-ext/blob/main/README.zh-CN.md)。安装后检查并进行一次性 Drive 授权：
+Eklenti deposunu klonlayıp `python3 install.py` de çalıştırabilirsiniz. Kurucu kaynağı `~/.colab-dfs-ext/` altına kaydeder ve `colab` komutunu sağlayan Python ortamına otomatik bağlar; ayrıntılı seçenekler için [eklenti README'si](https://github.com/deluxebear/colab-dfs-ext/blob/main/README.md). Kurduktan sonra denetleyin ve tek seferlik Drive yetkilendirmesini yapın:
 
 ```bash
 colab dfs --help
 colab dfs version
 colab dfs doctor
-colab dfs consent     # 浏览器完成一次授权，后续挂载无需再次交互
-colab dfs show        # 查看授权摘要，不打印 refresh token
+colab dfs consent     # tarayıcıda bir kez yetki verin, sonraki bağlamalar etkileşim istemez
+colab dfs show        # yetki özetini gösterir, refresh token'ı yazdırmaz
 ```
 
-Drive 授权与 Colab 会话认证分别进行。扩展凭据保存在 `~/.config/colab-cli/dfs_credentials.json`。正常使用时，服务脚本自动挂载远端 `/content/drive`，无需手工调用 `mount`；已有空闲会话可用 `colab dfs mount -s <会话名>` 验证。
+Drive yetkilendirmesi ile Colab oturum kimlik doğrulaması ayrı yapılır. Eklentinin kimlik bilgileri `~/.config/colab-cli/dfs_credentials.json` dosyasındadır. Normal kullanımda servis betikleri uzaktaki `/content/drive`'ı otomatik bağlar, `mount`'u elle çağırmak gerekmez; boşta bir oturumla `colab dfs mount -s <oturum-adı>` ile doğrulayabilirsiniz.
 
-升级 Colab CLI 后，可执行 `colab dfs --help` 检查扩展是否仍在；命令可用时可运行 `colab dfs install` 重新接入。若出现 `No such command: dfs`，且扩展仍在 `~/.colab-dfs-ext/`，可重新运行安装器修复：
+Colab CLI'ı güncelledikten sonra eklentinin hâlâ yerinde olduğunu `colab dfs --help` ile kontrol edin; komut çalışıyorsa `colab dfs install` ile yeniden bağlayabilirsiniz. `No such command: dfs` görünür ve eklenti hâlâ `~/.colab-dfs-ext/` altındaysa kurucuyu yeniden çalıştırarak onarın:
 
 ```bash
 python3 "$HOME/.colab-dfs-ext/install.py"
 colab dfs --help
 ```
 
-若扩展目录缺失，重新运行上面的安装命令。`up --no-drive` 可跳过自动挂载，但需要网盘音色、任务持久化和输出保存的功能仍依赖 Drive，不适合作为这些功能的替代配置。
+Eklenti dizini yoksa yukarıdaki kurulum komutunu yeniden çalıştırın. `up --no-drive` otomatik bağlamayı atlar, ancak Drive'daki ses örnekleri, görev kalıcılığı ve çıktı kaydetme gibi özellikler yine Drive'a bağlıdır; bu özellikler için bir alternatif değildir.
 
-### 3. 安装 Cloudflare `cf` CLI
+### 3. Cloudflare `cf` CLI kurulumu
 
-使用固定域名时，无论选择 Cloudflare Tunnel 还是 FRP，都需要在**本机**安装并授权 `cf`。这里的 `cf` 是 Cloudflare CLI，不是 Cloud Foundry CLI，也不是远端运行的 `cloudflared`。
+Sabit alan adı kullanıldığında, Cloudflare Tunnel ya da FRP fark etmeksizin `cf`'nin **yerel makineye** kurulup yetkilendirilmesi gerekir. Buradaki `cf`, Cloud Foundry CLI veya uzakta çalışan `cloudflared` değil, Cloudflare CLI'dır.
 
-准备符合所安装 `cf` 版本要求的 Node.js/npm，然后安装：
+Kurulu `cf` sürümünün gerektirdiği Node.js/npm'i hazırlayıp kurun:
 
 ```bash
 node --version
@@ -358,24 +375,24 @@ cf auth login
 cf auth whoami
 ```
 
-安装和认证说明见 [Cloudflare 官方文档](https://developers.cloudflare.com/cf/get-started/)。账号需有目标域名的 Zone/DNS 管理权限；使用 named tunnel 时还需有隧道管理权限。`cf zones list` 可检查域名是否在当前账号中。只使用 Cloudflare 动态 URL 时，可跳过本节。
+Kurulum ve kimlik doğrulama için [Cloudflare resmi belgeleri](https://developers.cloudflare.com/cf/get-started/). Hesabın hedef alan adı için Zone/DNS yönetim yetkisi olmalı; named tunnel için tünel yönetim yetkisi de gerekir. `cf zones list` alan adının hesapta olup olmadığını gösterir. Yalnızca dinamik Cloudflare URL'si kullanılacaksa bu bölüm atlanabilir.
 
-本机已验证的组合为 `google-colab-cli 0.7.5`、`colab dfs 0.1.0`、`cf 1.0.0-beta.26` 和 Node.js `26.13.0`。其中该 `cf` 版本的 Node.js 要求为 `^22.23.0 || ^24.22.0 || ^26.12.0`；升级版本时以 npm 包的 `engines` 声明为准，避免仅按大版本判断兼容性。
+Yerelde doğrulanmış kombinasyon `google-colab-cli 0.7.5`, `colab dfs 0.1.0`, `cf 1.0.0-beta.26` ve Node.js `26.13.0`'dır. Bu `cf` sürümünün Node.js gereksinimi `^22.23.0 || ^24.22.0 || ^26.12.0`'dır; güncellerken yalnızca ana sürüme bakmak yerine npm paketinin `engines` bildirimini esas alın.
 
-### 4. FRP 模式额外要求
+### 4. FRP modu için ek gereksinimler
 
-本机需要 OpenSSH，以及能够非交互连接服务器的密钥配置：
+Yerelde OpenSSH ve sunucuya etkileşimsiz bağlanabilen bir anahtar yapılandırması gerekir:
 
 ```bash
 ssh -V
 ssh -o BatchMode=yes root@frpip 'id -u'
 ```
 
-`root@frpip` 是示例，替换为实际 SSH 目标；首次连接应先核实服务器主机指纹。服务器需要 Linux、systemd、Python 3，以及 root 或免密 sudo；读取既有 FRP TOML 配置需要服务器 Python 3.11+。服务端需允许公网 TCP 7000、80 和 443。配置命令会安装或复用服务器上的 frps/Caddy，本机不需要预先安装它们，详见 [FRP 操作说明](https://github.com/deluxebear/colabllm/blob/master/docs/frp.md)。
+`root@frpip` bir örnektir, gerçek SSH hedefiyle değiştirin; ilk bağlantıda sunucunun host parmak izini doğrulayın. Sunucuda Linux, systemd, Python 3 ve root ya da şifresiz sudo gerekir; mevcut FRP TOML yapılandırmasını okumak için sunucuda Python 3.11+ gerekir. Sunucu internete TCP 7000, 80 ve 443'ü açmalıdır. Yapılandırma komutu sunucudaki frps/Caddy'yi kurar veya yeniden kullanır, yerelde önceden kurmak gerekmez; ayrıntılar [FRP işlemleri](https://github.com/deluxebear/colabllm/blob/master/docs/frp.md) belgesinde.
 
-### 启动前自检
+### Başlatma öncesi kontrol
 
-在项目根目录、实际用于运行服务的终端中执行：
+Proje kök dizininde, servisleri gerçekten çalıştıracağınız terminalde şunları çalıştırın:
 
 ```bash
 python3 --version
@@ -384,100 +401,100 @@ colab version
 colab dfs --help
 colab dfs show
 colabllm tunnel-config
-# 固定域名 / FRP 模式还需检查
+# Sabit alan adı / FRP modu için ayrıca kontrol edin
 command -v cf
 cf --version
 cf auth whoami
-# FRP 模式还需检查
+# FRP modu için ayrıca kontrol edin
 ssh -V
 colabllm frp-status
 ```
 
-认证文件保存在本机用户目录，运行时状态保存在用户目录 `~/.colabllm/services/`。执行脚本的本机需要持续在线且避免休眠：后台 runner 维持 `colab exec` 连接，断开可能导致 Colab 会话被回收。远端所需模型依赖、`cloudflared`/`frpc` 和认证 Caddy 由 Notebook 安装，不需要在本机重复安装。
+Kimlik doğrulama dosyaları yerel kullanıcı dizininde, runtime durumu `~/.colabllm/services/` altındadır. Betikleri çalıştıran makine sürekli çevrimiçi olmalı ve uykuya geçmemelidir: arka plan runner'ı `colab exec` bağlantısını sürdürür, bağlantı koparsa Colab oturumu geri alınabilir. Uzakta gereken model bağımlılıkları, `cloudflared`/`frpc` ve kimlik doğrulayan Caddy notebook tarafından kurulur, yerelde yeniden kurmak gerekmez.
 
-## Cloudflare Tunnel 配置
+## Cloudflare Tunnel yapılandırması
 
-通过 `colabllm tunnel-config` 统一配置；所有现有及新增运行时、所有实例均读取同一份主域名配置，保存在本机 `~/.colabllm/tunnel-config.json`。未启用 FRP 且配置为空时，`up`（包括不带 HOST 的 `up --domain`）使用 Cloudflare Quick Tunnel 的随机 `https://*.trycloudflare.com` URL，无需 `cf` 登录；每次启动 URL 可能变化。代码中的历史 `example.com` 后缀不再自动启用。
+Yapılandırma tek yerden `colabllm tunnel-config` ile yapılır; mevcut ve yeni tüm runtime'lar ve tüm örnekler, yerel `~/.colabllm/tunnel-config.json` dosyasındaki aynı ana alan adı ayarını okur. FRP etkin değilse ve ayar boşsa `up` (HOST verilmeyen `up --domain` dahil) Cloudflare Quick Tunnel'ın rastgele `https://*.trycloudflare.com` URL'sini kullanır, `cf` girişi gerekmez; URL her başlatmada değişebilir. Koddaki eski `example.com` soneki artık otomatik etkinleşmez.
 
 ```bash
-# 查看 / 设置 / 清除全局主域名（项目根目录统一入口）
+# Global ana alan adını göster / ayarla / temizle (proje kökündeki tek giriş)
 colabllm tunnel-config
 colabllm tunnel-config --base-domain example.com
 colabllm tunnel-config --clear
 
-# 只为本次启动指定主域名，不写入配置
+# Ana alan adını yalnızca bu başlatma için ver, yapılandırmaya yazma
 colabllm longcat-avatar up --base-domain example.com
 # -> https://longcat-avatar.example.com
 colabllm qwen-flash up -i 2 --base-domain example.com
-# -> https://qwen-2.example.com（保留服务别名与实例后缀）
+# -> https://qwen-2.example.com (servis takma adı ve örnek soneki korunur)
 
-# 已配置主域名后：up 自动使用固定域名；也可以强制动态 URL
+# Ana alan adı ayarlıysa: up otomatik olarak sabit alan adını kullanır; dinamik URL de zorlanabilir
 colabllm longcat-avatar up
 colabllm longcat-avatar up --quick-tunnel
 
-# 完整域名覆盖自动生成的服务域名
+# Tam alan adı, otomatik üretilen servis alan adının yerine geçer
 colabllm longcat-avatar up --domain avatar.example.com
 ```
 
-可设置环境变量 `COLABSVC_BASE_DOMAIN=example.com`。选择顺序：`--quick-tunnel` 强制动态；完整 `--domain HOST` > `--base-domain` > 环境变量 > 全局配置 > 动态 URL。三个启动选项互斥。域名只填 DNS 名称，不包含 `https://`、端口或路径。
+`COLABSVC_BASE_DOMAIN=example.com` ortam değişkeni de ayarlanabilir. Seçim sırası: `--quick-tunnel` dinamiği zorlar; tam `--domain HOST` > `--base-domain` > ortam değişkeni > global ayar > dinamik URL. Üç başlatma seçeneği birbirini dışlar. Alan adına yalnızca DNS adı yazılır; `https://`, port veya yol eklenmez.
 
-Cloudflare 固定域名要求 `cf auth login` 且账户有该域名的 DNS Zone 权限，启动时自动创建/复用 named tunnel、设置 ingress 和 DNS CNAME。配置修改仅影响之后的启动，不会重启运行中的服务；已有服务需自行择机重启。切换动态模式不会删除旧隧道和 DNS，可使用 `down --delete-tunnel` 显式清理。
+Cloudflare sabit alan adı `cf auth login` ve hesabın o alan adı için DNS Zone yetkisini gerektirir; başlatmada named tunnel otomatik oluşturulur/yeniden kullanılır, ingress ve DNS CNAME ayarlanır. Ayar değişiklikleri yalnızca sonraki başlatmaları etkiler, çalışan servisleri yeniden başlatmaz; mevcut servisleri uygun bir zamanda kendiniz yeniden başlatın. Dinamik moda geçmek eski tünel ve DNS kayıtlarını silmez; `down --delete-tunnel` ile açıkça temizleyin.
 
-## FRP 后端（项目全局）
+## FRP arka ucu (proje geneli)
 
-默认使用 Cloudflare Tunnel；全局配置 FRP 后，所有运行时的新启动自动使用 FRP + 服务端 Caddy HTTPS。
+Varsayılan Cloudflare Tunnel'dır; FRP global olarak yapılandırıldığında tüm runtime'ların yeni başlatmaları otomatik olarak FRP + sunucu tarafı Caddy HTTPS kullanır.
 
 ```bash
-# 配置并通过 SSH 自动安装服务端（替换示例 IP、SSH 目标和域名）
+# Yapılandırıp sunucu tarafını SSH ile otomatik kur (örnek IP, SSH hedefi ve alan adını değiştirin)
 colabllm frp-config --server-ip 203.0.113.10 --ssh root@frpip --base-domain example.com
 colabllm frp-status
 colabllm indextts up
 
-# 本次覆盖 / 关闭全局 FRP
+# Bu başlatma için geçersiz kıl / global FRP'yi kapat
 colabllm indextts up --transport cloudflare
 colabllm indextts up --quick-tunnel
 colabllm frp-config --disable
 ```
 
-FRP 服务端默认 TCP 7000，Caddy 使用 80/443；DNS 经本机 `cf` 自动配置为 DNS only。配置、自动安装、认证及清理说明见 [FRP 操作说明](https://github.com/deluxebear/colabllm/blob/master/docs/frp.md)。现有运行时不会自动切换。
+FRP sunucusu varsayılan olarak TCP 7000, Caddy 80/443 kullanır; DNS yerel `cf` ile otomatik olarak DNS only ayarlanır. Yapılandırma, otomatik kurulum, kimlik doğrulama ve temizlik için [FRP işlemleri](https://github.com/deluxebear/colabllm/blob/master/docs/frp.md). Mevcut runtime'lar otomatik geçiş yapmaz.
 
-## 常用命令
+## Sık kullanılan komutlar
 
-以 `unsloth-studio` 和 `ollama` 为例：
+`unsloth-studio` ve `ollama` örneğiyle:
 
 ```bash
-# 1. 启动服务（未配置主域名时使用随机 *.trycloudflare.com 临时链接）
+# 1. Servisi başlat (ana alan adı yoksa rastgele geçici *.trycloudflare.com bağlantısı kullanılır)
 colabllm unsloth-studio up
 
-# 2. 配置所有服务共享的主域名，再启动固定域名服务
+# 2. Tüm servislerin ortak ana alan adını ayarla, sonra sabit alan adıyla başlat
 colabllm tunnel-config --base-domain example.com
 colabllm ollama up --domain
-colabllm qwen-flash up --domain     # 绑定 https://qwen.example.com（G4 GPU，800K 上下文 + 视觉）
+colabllm qwen-flash up --domain     # https://qwen.example.com'a bağlanır (G4 GPU, 800K bağlam + görsel)
 
-# 3. 查看访问 URL、登录密码与 API Token
+# 3. Erişim URL'sini, giriş şifresini ve API token'ını göster
 colabllm ollama info --show-secrets
 
-# 4. 查看实时日志 / 检查状态与公网连通性
+# 4. Canlı logları izle / durumu ve dış erişimi kontrol et
 colabllm ollama logs -f
 colabllm ollama status
 
-# 5. 停止服务并释放 Colab VM（加 --delete-tunnel 同时删除 Cloudflare 隧道和 DNS 记录）
+# 5. Servisi durdur ve Colab VM'ini serbest bırak (--delete-tunnel ile Cloudflare tüneli ve DNS kayıtları da silinir)
 colabllm ollama down
 colabllm ollama down --delete-tunnel
 ```
 
-## 多实例（多会话）并发支持（所有运行时通用）
+## Çoklu örnek (çoklu oturum) eşzamanlılık desteği (tüm runtime'larda)
 
-所有运行时脚本（`nemotron-transcribe.py`、`comfyui.py`、`qwen-flash.py`、`ollama.py`、`unsloth-studio.py` 以及 `templates/service.py`）均原生支持通过 **`-i <ID>` / `--instance <ID>`**（或环境变量 `CT_INSTANCE=<ID>`）创建和管理多个独立的 Colab GPU 会话与隧道：
+Tüm runtime betikleri (`nemotron-transcribe.py`, `comfyui.py`, `qwen-flash.py`, `ollama.py`, `unsloth-studio.py` ve `templates/service.py`), **`-i <ID>` / `--instance <ID>`** (veya `CT_INSTANCE=<ID>` ortam değişkeni) ile birden fazla bağımsız Colab GPU oturumu ve tünelini doğrudan oluşturmayı ve yönetmeyi destekler:
 
-| 实例参数 | Colab 会话名 (`-s`) | 状态目录 (`~/.colabllm/services/`) | 隧道名 (`--domain`) | 默认域名 (`--domain`) | 网盘共享目录 (`CT_DATA_DIR`) |
+| Örnek argümanı | Colab oturum adı (`-s`) | Durum dizini (`~/.colabllm/services/`) | Tünel adı (`--domain`) | Varsayılan alan adı (`--domain`) | Paylaşılan Drive dizini (`CT_DATA_DIR`) |
 | --- | --- | --- | --- | --- | --- |
-| 默认（不传 `-i`） | `<name>` | `~/.colabllm/services/<name>/` | `colab-<name>` | `<host>.example.com` | `/content/drive/MyDrive/colab-llm/<name>` |
-| `-i 1` | `<name>-1` | `~/.colabllm/services/<name>-1/` | `colab-<name>-1` | `<host>-1.example.com` | `/content/drive/MyDrive/colab-llm/<name>`（共享缓存与数据） |
-| `-i 2` | `<name>-2` | `~/.colabllm/services/<name>-2/` | `colab-<name>-2` | `<host>-2.example.com` | `/content/drive/MyDrive/colab-llm/<name>`（共享缓存与数据） |
+| Varsayılan (`-i` yok) | `<name>` | `~/.colabllm/services/<name>/` | `colab-<name>` | `<host>.example.com` | `/content/drive/MyDrive/colab-llm/<name>` |
+| `-i 1` | `<name>-1` | `~/.colabllm/services/<name>-1/` | `colab-<name>-1` | `<host>-1.example.com` | `/content/drive/MyDrive/colab-llm/<name>` (önbellek ve veri paylaşılır) |
+| `-i 2` | `<name>-2` | `~/.colabllm/services/<name>-2/` | `colab-<name>-2` | `<host>-2.example.com` | `/content/drive/MyDrive/colab-llm/<name>` (önbellek ve veri paylaşılır) |
 
 ```bash
-# 启动任意运行时的多个并发实例（各自拥有独立的 Colab GPU VM、Cloudflare 隧道与域名）
+# Herhangi bir runtime'ın birden fazla eşzamanlı örneğini başlat (her birinin kendi Colab GPU VM'i, Cloudflare tüneli ve alan adı olur)
 colabllm comfyui up -i 1 --domain               # -> https://comfyui-1.example.com
 colabllm comfyui up -i 2 --domain               # -> https://comfyui-2.example.com
 colabllm qwen-flash up -i 2 --domain            # -> https://qwen-2.example.com
@@ -485,42 +502,42 @@ colabllm ollama up -i 2 --domain                # -> https://ollama-2.example.co
 colabllm unsloth-studio up -i 2 --domain        # -> https://unsloth-studio-2.example.com
 colabllm nemotron-transcribe up -i 2 --domain   # -> https://transcribe-2.example.com
 
-# 列出某个服务的所有实例状态、URL 与 API Token
+# Bir servisin tüm örneklerinin durumunu, URL'sini ve API token'ını listele
 colabllm <name> ps
 
-# 查看指定实例的详情 / 日志 / 状态
+# Belirli bir örneğin ayrıntılarını / loglarını / durumunu göster
 colabllm <name> info --show-secrets -i 2
 colabllm <name> logs -i 2 -f
 colabllm <name> status -i 2
 
-# 停止指定实例，或使用 --all 一键停止该服务的所有实例
+# Belirli bir örneği durdur ya da --all ile servisin tüm örneklerini tek seferde durdur
 colabllm <name> down -i 2
 colabllm <name> down --all
 ```
 
-## 新增一个大模型服务
+## Yeni bir model servisi ekleme
 
-1. 复制模板：
+1. Şablonu kopyalayın:
    ```bash
    cp templates/service.py src/colabllm/services/<name>.py
    cp templates/service.ipynb src/colabllm/services/<name>.ipynb
    chmod +x src/colabllm/services/<name>.py
    ```
-2. 修改 `src/colabllm/services/<name>.py` 中的 `Service(...)` 配置（端口、`auth="caddy"` 或 `"builtin"`、GPU 类型）。
-3. 修改 `src/colabllm/services/<name>.ipynb` 的 **Cell 1（安装）** 和 **Cell 2（启动服务，绑定 `127.0.0.1`）**。
-4. 先运行 `colabllm <name> up --dry-run` 检查执行计划，再正式运行 `up`。
-5. 同一变更中更新 `docs/<name>.md`，运行 `python tools/sync_runtime_docs.py` 生成对应的技能参考文档，并更新 `skills/colabllm/SKILL.md` 的运行时索引，覆盖启动、调用、输入输出、认证和任务恢复。新增、删除运行时或修改命令行为都需要同步维护用户技能。
-6. 核对技能示例与实际 CLI 参数一致，构建分发包，并用 `tools/check_distribution.py` 验证安装、运行时发现和完整技能导出；新增文件类型时同步调整打包规则。运行时及其用户技能均可从安装包使用后，才算完成新增流程。
+2. `src/colabllm/services/<name>.py` içindeki `Service(...)` yapılandırmasını düzenleyin (port, `auth="caddy"` veya `"builtin"`, GPU tipi).
+3. `src/colabllm/services/<name>.ipynb` içindeki **Cell 1 (kurulum)** ve **Cell 2 (servisi başlatma, `127.0.0.1`'e bağlı)** hücrelerini düzenleyin.
+4. Önce `colabllm <name> up --dry-run` ile çalıştırma planını kontrol edin, sonra `up`'ı gerçekten çalıştırın.
+5. Aynı değişiklikte `docs/<name>.md`'yi güncelleyin, `python tools/sync_runtime_docs.py` ile skill referansını üretin ve `skills/colabllm/SKILL.md` içindeki runtime dizinini başlatma, çağırma, girdi/çıktı, kimlik doğrulama ve görev kurtarmayı kapsayacak şekilde güncelleyin. Runtime eklemek, silmek veya komut davranışını değiştirmek kullanıcı skill'inin de güncellenmesini gerektirir.
+6. Skill örneklerinin gerçek CLI argümanlarıyla tutarlı olduğunu kontrol edin, dağıtım paketini derleyin ve kurulum, runtime keşfi ve skill dışa aktarımını `tools/check_distribution.py` ile doğrulayın; yeni dosya türü eklediyseniz paketleme kurallarını da güncelleyin. Ekleme, runtime ve kullanıcı skill'i kurulu paketten kullanılabildiğinde tamamlanmış sayılır.
 
-详细规范与排错指南见 [`.agents/skills/colab-llm-service/SKILL.md`](https://github.com/deluxebear/colabllm/blob/master/.agents/skills/colab-llm-service/SKILL.md)。
+Ayrıntılı kurallar ve sorun giderme için [`.agents/skills/colab-llm-service/SKILL.md`](https://github.com/deluxebear/colabllm/blob/master/.agents/skills/colab-llm-service/SKILL.md).
 
-## 修改 notebook
+## Notebook'ları değiştirme
 
-`src/colabllm/services/*.ipynb` 与 `templates/service.ipynb` 由 `templates/build_notebooks.py` 生成，请勿直接手改。
-中间件、缓存、隧道等逻辑以独立模块保存在 `templates/`（如 `colab_asgi_common.py`、`colab_cache.py`、`tunnel_client.py`），
-可在本地单元测试；修改后运行 `python3 templates/build_notebooks.py` 重新生成，测试会校验生成结果与提交内容一致。
+`src/colabllm/services/*.ipynb` ve `templates/service.ipynb`, `templates/build_notebooks.py` tarafından üretilir; elle düzenlemeyin.
+Ara katman, önbellek, tünel gibi mantıklar `templates/` altında bağımsız modüller olarak durur (ör. `colab_asgi_common.py`, `colab_cache.py`, `tunnel_client.py`),
+böylece yerelde birim testi yapılabilir; değiştirdikten sonra `python3 templates/build_notebooks.py` ile yeniden üretin, testler üretilen sonucun commit'lenen içerikle aynı olduğunu doğrular.
 
 ## License
 
-本项目基于 [MIT License](https://github.com/deluxebear/colabllm/blob/master/LICENSE) 开源。
-各运行时下载的第三方模型、镜像与软件遵循其各自的许可证与使用条款，请在使用前自行确认。
+Bu proje [MIT License](https://github.com/deluxebear/colabllm/blob/master/LICENSE) ile açık kaynaktır.
+Runtime'ların indirdiği üçüncü taraf modeller, imajlar ve yazılımlar kendi lisans ve kullanım koşullarına tabidir; kullanmadan önce kendiniz kontrol edin.

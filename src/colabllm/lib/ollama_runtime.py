@@ -125,7 +125,7 @@ def validate_model_spec(spec: str) -> str:
     cleaned = (spec or "").strip()
     if not cleaned or ".." in cleaned or not MODEL_SPEC_RE.fullmatch(cleaned):
         raise ValueError(
-            f"无效的模型名称 {spec!r}：请使用合法的 Ollama 模型标签（如 qwen3:8b）或 Hugging Face GGUF 标识（如 hf.co/org/repo:Q4_K_M）"
+            f"Invalid model name {spec!r}: use a valid Ollama model tag (e.g. qwen3:8b) or a Hugging Face GGUF reference (e.g. hf.co/org/repo:Q4_K_M)"
         )
     return cleaned
 
@@ -146,7 +146,7 @@ def parse_model_specs(
 
     if no_models:
         if any(part.strip() for item in items for part in str(item).split(",")):
-            raise ValueError("--no-models 不能与 --models 同时指定非空模型")
+            raise ValueError("--no-models cannot be combined with a non-empty --models")
         return []
 
     if raw_values is None:
@@ -165,7 +165,7 @@ def parse_model_specs(
             tokens.append(validate_model_spec(tok))
 
     if explicit_none and tokens:
-        raise ValueError("模型列表中不能同时包含 'none' 与具体模型名")
+        raise ValueError("The model list cannot contain both 'none' and specific model names")
     if explicit_none or not tokens:
         return []
     return list(dict.fromkeys(tokens))
@@ -184,13 +184,13 @@ def parse_model_aliases(raw_values: list[str] | str | None) -> list[tuple[str, s
                 continue
             alias_raw, sep, source_raw = entry.partition("=")
             if not sep:
-                raise ValueError(f"--alias 格式必须为 ALIAS=MODEL（如 gpt-4o=qwen3:8b），收到: {entry!r}")
+                raise ValueError(f"--alias must have the form ALIAS=MODEL (e.g. gpt-4o=qwen3:8b), got: {entry!r}")
             alias = validate_model_spec(alias_raw)
             source = validate_model_spec(source_raw)
             if alias == source:
-                raise ValueError(f"模型别名与源模型不能相同: {alias!r}")
+                raise ValueError(f"A model alias cannot be the same as its source model: {alias!r}")
             if alias in mapping and mapping[alias] != source:
-                raise ValueError(f"模型别名 {alias!r} 被重复映射到不同模型: {mapping[alias]!r} 与 {source!r}")
+                raise ValueError(f"Model alias {alias!r} is mapped to different models: {mapping[alias]!r} and {source!r}")
             mapping[alias] = source
     return list(mapping.items())
 
@@ -221,11 +221,11 @@ def parse_compat_apis(raw_values: list[str] | str | None) -> tuple[str, ...]:
             canonical = COMPAT_ALIASES.get(tok)
             if not canonical:
                 raise ValueError(
-                    f"不支持的兼容接口 {part.strip()!r}；可选值: all, ollama, openai, anthropic（可逗号分隔）"
+                    f"Unsupported compatibility API {part.strip()!r}; choices: all, ollama, openai, anthropic (comma-separated)"
                 )
             selected.add(canonical)
     if not selected:
-        raise ValueError("--compat 至少需要指定一个接口（all, ollama, openai, anthropic）")
+        raise ValueError("--compat needs at least one API (all, ollama, openai, anthropic)")
     return tuple(api for api in COMPAT_APIS if api in selected)
 
 
@@ -234,7 +234,7 @@ def validate_duration(value: str, flag_name: str = "duration") -> str:
     cleaned = str(value).strip()
     if not cleaned or not DURATION_RE.fullmatch(cleaned):
         raise ValueError(
-            f"{flag_name} 格式无效 ({value!r})：请填写 Go 时长（如 30m、24h、5m）或整数秒（-1 表示常驻不卸载，0 表示立即卸载/不限时）"
+            f"Invalid {flag_name} ({value!r}): use a Go duration (e.g. 30m, 24h, 5m) or integer seconds (-1 keeps the model loaded forever, 0 unloads immediately / no limit)"
         )
     return cleaned
 
@@ -255,12 +255,12 @@ def parse_byte_size(value: str | int, flag_name: str = "--gpu-overhead") -> int:
     """Parse integer bytes or human size strings (e.g. 512M, 1.5G, 1073741824) into non-negative bytes."""
     if isinstance(value, int) and not isinstance(value, bool):
         if value < 0:
-            raise ValueError(f"{flag_name} 不能为负数")
+            raise ValueError(f"{flag_name} cannot be negative")
         return value
     raw = str(value).strip()
     match = BYTE_SIZE_RE.fullmatch(raw)
     if not match:
-        raise ValueError(f"{flag_name} 格式无效 ({value!r})：请填写非负字节数或带单位大小（如 512M、1G）")
+        raise ValueError(f"Invalid {flag_name} ({value!r}): use a non-negative byte count or a size with a unit (e.g. 512M, 1G)")
     number = float(match.group(1))
     unit = (match.group(2) or "").lower()
     multipliers = {
@@ -272,14 +272,14 @@ def parse_byte_size(value: str | int, flag_name: str = "--gpu-overhead") -> int:
         "t": 1024**4, "tb": 1024**4, "tib": 1024**4,
     }
     if unit not in multipliers or not math.isfinite(number):
-        raise ValueError(f"{flag_name} 单位无效 ({value!r})")
+        raise ValueError(f"Invalid unit for {flag_name} ({value!r})")
     return int(round(number * multipliers[unit]))
 
 
 def validate_ollama_version(value: str) -> str:
     cleaned = str(value).strip().lstrip("v")
     if not VERSION_RE.fullmatch(cleaned):
-        raise ValueError(f"无效的 Ollama 版本号 {value!r}：示例 0.17.7 或 0.18.0-rc1")
+        raise ValueError(f"Invalid Ollama version {value!r}: e.g. 0.17.7 or 0.18.0-rc1")
     return cleaned
 
 
@@ -290,17 +290,17 @@ def parse_extra_ollama_env(entries: list[str] | None) -> dict[str, str]:
         key, sep, val = str(raw).partition("=")
         key = key.strip()
         if not sep or not key:
-            raise ValueError(f"--ollama-env 格式必须为 KEY=VALUE，收到: {raw!r}")
+            raise ValueError(f"--ollama-env must have the form KEY=VALUE, got: {raw!r}")
         if key in FORBIDDEN_ENV_KEYS or key.upper() in FORBIDDEN_ENV_KEYS:
             raise ValueError(
-                f"不允许通过 --ollama-env 覆盖 {key}：OLLAMA_HOST 必须固定绑定 127.0.0.1，代理由 HTTPS_PROXY 配置"
+                f"{key} cannot be overridden with --ollama-env: OLLAMA_HOST must stay bound to 127.0.0.1, and proxies are configured with HTTPS_PROXY"
             )
         if not (key.startswith("OLLAMA_") or key in ALLOWED_EXTRA_ENV_EXACT or key.startswith("HSA_OVERRIDE_GFX_VERSION_")):
             raise ValueError(
-                f"--ollama-env 仅支持 OLLAMA_* 或受支持的 GPU/代理环境变量，收到: {key!r}"
+                f"--ollama-env only accepts OLLAMA_* or supported GPU/proxy environment variables, got: {key!r}"
             )
         if "\x00" in val or "\n" in val or "\r" in val:
-            raise ValueError(f"--ollama-env {key} 的值不能包含换行或空字节")
+            raise ValueError(f"The value of --ollama-env {key} cannot contain newlines or null bytes")
         out[key] = val
     return out
 
@@ -329,20 +329,20 @@ def build_ollama_server_env(
     if profile is not None:
         prof = profile.strip().lower()
         if prof not in OPTIMIZATION_PROFILES:
-            raise ValueError(f"不支持的优化预设 {profile!r}；可选: {', '.join(OPTIMIZATION_PROFILES)}")
+            raise ValueError(f"Unsupported optimization profile {profile!r}; choices: {', '.join(OPTIMIZATION_PROFILES)}")
         env.update(OPTIMIZATION_PROFILES[prof])
 
     if context_length is not None:
         if int(context_length) < 256:
-            raise ValueError("--context-length 必须 >= 256")
+            raise ValueError("--context-length must be >= 256")
         env["OLLAMA_CONTEXT_LENGTH"] = str(int(context_length))
 
     if kv_cache_type is not None:
         kvt = kv_cache_type.strip().lower()
         if kvt not in KV_CACHE_TYPES:
-            raise ValueError(f"--kv-cache-type 必须是 {', '.join(KV_CACHE_TYPES)} 之一")
+            raise ValueError(f"--kv-cache-type must be one of {', '.join(KV_CACHE_TYPES)}")
         if kvt in ("q8_0", "q4_0") and flash_attention is False:
-            raise ValueError(f"KV Cache 量化 ({kvt}) 需要开启 Flash Attention，不能同时指定 --no-flash-attention")
+            raise ValueError(f"KV cache quantization ({kvt}) requires Flash Attention; it cannot be combined with --no-flash-attention")
         env["OLLAMA_KV_CACHE_TYPE"] = kvt
         if kvt in ("q8_0", "q4_0") and flash_attention is None:
             # Ollama requires Flash Attention when quantizing the K/V cache.
@@ -356,17 +356,17 @@ def build_ollama_server_env(
 
     if num_parallel is not None:
         if int(num_parallel) < 1:
-            raise ValueError("--num-parallel 必须 >= 1")
+            raise ValueError("--num-parallel must be >= 1")
         env["OLLAMA_NUM_PARALLEL"] = str(int(num_parallel))
 
     if max_loaded_models is not None:
         if int(max_loaded_models) < 0:
-            raise ValueError("--max-loaded-models 必须 >= 0（0 表示自动）")
+            raise ValueError("--max-loaded-models must be >= 0 (0 means automatic)")
         env["OLLAMA_MAX_LOADED_MODELS"] = str(int(max_loaded_models))
 
     if max_queue is not None:
         if int(max_queue) < 1:
-            raise ValueError("--max-queue 必须 >= 1")
+            raise ValueError("--max-queue must be >= 1")
         env["OLLAMA_MAX_QUEUE"] = str(int(max_queue))
 
     if keep_alive is not None:
@@ -383,13 +383,13 @@ def build_ollama_server_env(
 
     if max_transfer_streams is not None:
         if int(max_transfer_streams) < 1:
-            raise ValueError("--max-transfer-streams 必须 >= 1")
+            raise ValueError("--max-transfer-streams must be >= 1")
         env["OLLAMA_MAX_TRANSFER_STREAMS"] = str(int(max_transfer_streams))
 
     if origins is not None:
         cleaned_origins = origins.strip()
         if "\n" in cleaned_origins or "\r" in cleaned_origins or "\x00" in cleaned_origins:
-            raise ValueError("--origins 不能包含换行或空字节")
+            raise ValueError("--origins cannot contain newlines or null bytes")
         env["OLLAMA_ORIGINS"] = cleaned_origins
 
     if no_cloud is not None:
@@ -404,7 +404,7 @@ def build_ollama_server_env(
         elif dbg in ("2", "trace"):
             env["OLLAMA_DEBUG"] = "2"
         else:
-            raise ValueError("--ollama-debug 可选值为 0、1（debug）或 2（trace）")
+            raise ValueError("--ollama-debug accepts 0, 1 (debug) or 2 (trace)")
 
     env.update(parse_extra_ollama_env(extra_env))
     return env
@@ -601,7 +601,7 @@ def pull_model_stream(
                         continue
                     event = json.loads(line)
                     if event.get("error"):
-                        raise RuntimeError(f"拉取模型 {spec} 失败: {event['error']}")
+                        raise RuntimeError(f"Pulling model {spec} failed: {event['error']}")
                     final_event = event
                     status = str(event.get("status") or "")
                     total = event.get("total")
@@ -633,8 +633,8 @@ def pull_model_stream(
                     log_fn(f"pull {spec} interrupted ({err}); retrying ({attempt + 1}/{retries})...")
                 time.sleep(min(2 * attempt, 6))
                 continue
-            raise RuntimeError(f"拉取模型 {spec} 失败（重试 {retries} 次后）: {err}") from None
-    raise RuntimeError(f"拉取模型 {spec} 失败: {last_err}")
+            raise RuntimeError(f"Pulling model {spec} failed (after {retries} retries): {err}") from None
+    raise RuntimeError(f"Pulling model {spec} failed: {last_err}")
 
 
 def copy_model_alias(

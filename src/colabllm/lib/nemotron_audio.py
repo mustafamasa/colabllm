@@ -21,7 +21,7 @@ DIRECT_MIMES = {
 
 PRESETS: dict[str, dict[str, Any]] = {
     "verbatim": {
-        "description": "逐字转写（保留语气词、重复、标点与大小写，多语种通用默认推荐）",
+        "description": "Verbatim transcription (keeps fillers, repetitions, punctuation and casing; recommended multilingual default)",
         "user_prompt": (
             "Audio transcription. Language: as spoken. Wording: verbatim, including fillers and repetitions. "
             "Formatting: punctuation and capitalization. Output: transcript only."
@@ -31,7 +31,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "clean": {
-        "description": "整洁书面转写（去除口头禅与无意重复，保留原意与标点大小写）",
+        "description": "Clean written transcription (removes fillers and accidental repetitions; keeps meaning, punctuation and casing)",
         "user_prompt": (
             "Audio transcription. Language: as spoken. Wording: omit fillers and accidental repetitions; "
             "keep the remaining spoken wording unchanged. Formatting: punctuation and capitalization. "
@@ -42,7 +42,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "speaker": {
-        "description": "说话人分离转写 + 词级时间戳（带 <spk:0> <spk:1> 标签，配合 timestamps=True）",
+        "description": "Speaker-diarized transcription + word-level timestamps (<spk:0> <spk:1> tags; use with timestamps=True)",
         "user_prompt": (
             "Transcribe this audio with punctuation and capitalization. Include all spoken words and verbal fillers. "
             "Write numbers in their standard written form. Put speaker tags <spk:0> <spk:1> <spk:2> <spk:3> on the transcription."
@@ -52,7 +52,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": True,
     },
     "multispeaker": {
-        "description": "多说话人纯文本转写（无标点小写，每轮讲话前标注 <spk:N>）",
+        "description": "Multi-speaker plain-text transcription (no punctuation, lowercase, <spk:N> before each turn)",
         "user_prompt": (
             "Transcribe this audio. Include all spoken words and verbal fillers. Write numbers as spoken. "
             "Use no punctuation and no capitalization. Start every speaker turn with a speaker tag such as "
@@ -64,7 +64,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "rich": {
-        "description": "富文本转写（包含非语音事件 <ev:*> 与说话风格 <sty:*> 标签）",
+        "description": "Rich transcription (includes non-speech events <ev:*> and speaking-style <sty:*> tags)",
         "user_prompt": (
             "Transcribe this audio with punctuation and capitalization. Include all spoken words and verbal fillers. "
             "Write numbers in their standard written form. Use <ev:*> and <sty:*> special tokens to recognize all "
@@ -75,7 +75,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "near-field": {
-        "description": "仅转写距离麦克风最近的主讲人（过滤远场背景人声）",
+        "description": "Transcribe only the speaker closest to the microphone (filters far-field background voices)",
         "user_prompt": (
             "Transcribe this audio. Include all spoken words and verbal fillers. Write numbers as spoken. "
             "No punctuation or capitalization. Transcribe only the speaker nearest to the microphone. "
@@ -86,7 +86,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "structured": {
-        "description": "结构化内容转写（精确保留邮箱、URL、文件路径、命令、编号与标点分隔符）",
+        "description": "Structured-content transcription (precisely keeps emails, URLs, file paths, commands, numbers and punctuation separators)",
         "user_prompt": (
             "Transcribe as a clean written transcript. Preserve exact values and punctuation/separators in emails, "
             "URLs, file paths, commands, and identifiers. Use conventional written forms."
@@ -96,21 +96,21 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "context": {
-        "description": "带领域词汇/专有名词提示的上下文偏置转写（配合 context 参数）",
+        "description": "Context-biased transcription with domain vocabulary / proper-noun hints (use with the context parameter)",
         "user_prompt": "Transcribe with punctuation and capitalization. Context terms: {context}.",
         "system_prompt": "",
         "reasoning": False,
         "timestamps": False,
     },
     "translate": {
-        "description": "语音直接翻译为目标语言文本（配合 lang 参数，如 Chinese / English / Japanese）",
+        "description": "Direct speech translation into target-language text (use with the lang parameter, e.g. Chinese / English / Japanese)",
         "user_prompt": "Please translate the given speech to {lang}.",
         "system_prompt": "",
         "reasoning": False,
         "timestamps": False,
     },
     "lid": {
-        "description": "语种识别（输出录音对应的语言标签）",
+        "description": "Language identification (outputs the language label of the recording)",
         "user_prompt": (
             "Identify the language spoken in this audio. Respond with exactly one of the following locale labels "
             "and nothing else: ar_eg, bg_bg, cmn_hans_cn, hr_hr, cs_cz, da_dk, nl_nl, en_us, et_ee, fil_ph, fi_fi, "
@@ -122,7 +122,7 @@ PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "qa": {
-        "description": "音频理解与问答（开启推理模式 enable_thinking=True，根据录音内容回答问题）",
+        "description": "Audio understanding and Q&A (reasoning mode enable_thinking=True; answers questions about the recording)",
         "user_prompt": "What is happening in this audio?",
         "system_prompt": (
             "Answer the question directly using evidence from every provided audio clip in order. "
@@ -330,7 +330,7 @@ def words_to_srt(words: list[dict[str, Any]]) -> str:
             spk_changed
             or gap > 1.2
             or len(cur_words) >= 14
-            or (len(cur_words) >= 6 and cur_words[-1].endswith((".", "?", "!", "。", "？", "！")))
+            or (len(cur_words) >= 6 and cur_words[-1].endswith((".", "?", "!", "\u3002", "\uff1f", "\uff01")))
         ):
             flush()
             cur_start = w_start

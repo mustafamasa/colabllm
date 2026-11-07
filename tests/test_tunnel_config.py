@@ -64,7 +64,7 @@ class TunnelConfigTest(unittest.TestCase):
         for domain in ['https://example.com','example.com/path','example.com:443','*.example.com',
                        '127.0.0.1','localhost','bad_.example','-bad.example','example..com','']:
             with self.subTest(domain=domain),self.assertRaises(ValueError):svc.validate_domain(domain)
-        self.assertEqual(svc.validate_domain('例子.中国'),'xn--fsqu00a.xn--fiqs8s')
+        self.assertEqual(svc.validate_domain('örnek.çay'),'xn--rnek-4qa.xn--ay-3ia')
 
     def test_real_up_clears_previous_kernel_env_without_cf(self):
         script=self.root/'avatar.py';script.write_text('')

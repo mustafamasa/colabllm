@@ -82,7 +82,7 @@ PRECISION_REPOS = {
 
 LOCAL_PRESETS: dict[str, dict[str, Any]] = {
     "verbatim": {
-        "description": "逐字转写（保留语气词、重复、标点与大小写，多语种通用默认推荐）",
+        "description": "Verbatim transcription (keeps fillers, repetitions, punctuation and casing; recommended multilingual default)",
         "user_prompt": (
             "Audio transcription. Language: as spoken. Wording: verbatim, including fillers and repetitions. "
             "Formatting: punctuation and capitalization. Output: transcript only."
@@ -92,7 +92,7 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "clean": {
-        "description": "整洁书面转写（去除口头禅与无意重复，保留原意与标点大小写）",
+        "description": "Clean written transcription (removes fillers and accidental repetitions; keeps meaning, punctuation and casing)",
         "user_prompt": (
             "Audio transcription. Language: as spoken. Wording: omit fillers and accidental repetitions; "
             "keep the remaining spoken wording unchanged. Formatting: punctuation and capitalization. "
@@ -103,7 +103,7 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "speaker": {
-        "description": "说话人分离转写 + 词级时间戳（带 <spk:0> <spk:1> 标签，自动开启 timestamps）",
+        "description": "Speaker-diarized transcription + word-level timestamps (<spk:0> <spk:1> tags; timestamps enabled automatically)",
         "user_prompt": (
             "Transcribe this audio with punctuation and capitalization. Include all spoken words and verbal fillers. "
             "Write numbers in their standard written form. Put speaker tags <spk:0> <spk:1> <spk:2> <spk:3> on the transcription."
@@ -113,7 +113,7 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": True,
     },
     "multispeaker": {
-        "description": "多说话人纯文本转写（无标点小写，每轮讲话前标注 <spk:N>）",
+        "description": "Multi-speaker plain-text transcription (no punctuation, lowercase, <spk:N> before each turn)",
         "user_prompt": (
             "Transcribe this audio. Include all spoken words and verbal fillers. Write numbers as spoken. "
             "Use no punctuation and no capitalization. Start every speaker turn with a speaker tag such as "
@@ -125,7 +125,7 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "rich": {
-        "description": "富文本转写（包含非语音事件 <ev:*> 与说话风格 <sty:*> 标签）",
+        "description": "Rich transcription (includes non-speech events <ev:*> and speaking-style <sty:*> tags)",
         "user_prompt": (
             "Transcribe this audio with punctuation and capitalization. Include all spoken words and verbal fillers. "
             "Write numbers in their standard written form. Use <ev:*> and <sty:*> special tokens to recognize all "
@@ -136,7 +136,7 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "near-field": {
-        "description": "仅转写距离麦克风最近的主讲人（过滤远场背景人声）",
+        "description": "Transcribe only the speaker closest to the microphone (filters far-field background voices)",
         "user_prompt": (
             "Transcribe this audio. Include all spoken words and verbal fillers. Write numbers as spoken. "
             "No punctuation or capitalization. Transcribe only the speaker nearest to the microphone. "
@@ -147,7 +147,7 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "structured": {
-        "description": "结构化内容转写（精确保留邮箱、URL、文件路径、命令、编号与标点分隔符）",
+        "description": "Structured-content transcription (precisely keeps emails, URLs, file paths, commands, numbers and punctuation separators)",
         "user_prompt": (
             "Transcribe as a clean written transcript. Preserve exact values and punctuation/separators in emails, "
             "URLs, file paths, commands, and identifiers. Use conventional written forms."
@@ -157,21 +157,21 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "context": {
-        "description": "带领域词汇/专有名词提示的上下文偏置转写（配合 --context 参数）",
+        "description": "Context-biased transcription with domain vocabulary / proper-noun hints (use with --context)",
         "user_prompt": "Transcribe with punctuation and capitalization. Context terms: {context}.",
         "system_prompt": "",
         "reasoning": False,
         "timestamps": False,
     },
     "translate": {
-        "description": "语音直接翻译为目标语言文本（配合 --lang 参数，如 Chinese / English / Japanese）",
+        "description": "Direct speech translation into target-language text (use with --lang, e.g. Chinese / English / Japanese)",
         "user_prompt": "Please translate the given speech to {lang}.",
         "system_prompt": "",
         "reasoning": False,
         "timestamps": False,
     },
     "lid": {
-        "description": "语种识别（输出录音对应的语言标签）",
+        "description": "Language identification (outputs the language label of the recording)",
         "user_prompt": (
             "Identify the language spoken in this audio. Respond with exactly one of the following locale labels "
             "and nothing else: ar_eg, bg_bg, cmn_hans_cn, hr_hr, cs_cz, da_dk, nl_nl, en_us, et_ee, fil_ph, fi_fi, "
@@ -183,7 +183,7 @@ LOCAL_PRESETS: dict[str, dict[str, Any]] = {
         "timestamps": False,
     },
     "qa": {
-        "description": "音频理解与问答（自动开启推理模式 --reasoning，根据录音内容回答问题）",
+        "description": "Audio understanding and Q&A (reasoning mode --reasoning enabled automatically; answers questions about the recording)",
         "user_prompt": "What is happening in this audio?",
         "system_prompt": (
             "Answer the question directly using evidence from every provided audio clip in order. "
@@ -260,7 +260,7 @@ def _get_endpoint_pool(cli_args: argparse.Namespace) -> list[tuple[str, str, str
                 if it.get("alive") and it.get("url") and it.get("api_token")
             ]
         if not pool:
-            die(f"未在用户状态目录中找到任何运行中的 {base_name} 实例；请先执行 `up` 启动至少一个实例。")
+            die(f"No running {base_name} instance found in the user state directory; start at least one instance with `up` first.")
         return pool
 
     if getattr(cli_args, "instances", None):
@@ -272,7 +272,7 @@ def _get_endpoint_pool(cli_args: argparse.Namespace) -> list[tuple[str, str, str
         for w in wanted:
             it = by_id.get(w) or by_arg.get(w) or by_name.get(w) or by_name.get(f"{base_name}-{w}")
             if not it or not it.get("url") or not it.get("api_token"):
-                die(f"未找到可用实例 '{w}'（请通过 `colabllm nemotron-transcribe ps` 查看已启动实例）")
+                die(f"Instance '{w}' not found (list started instances with `colabllm nemotron-transcribe ps`)")
             pool.append((it["name"], it["url"].rstrip("/"), it["api_token"]))
         return pool
 
@@ -352,7 +352,7 @@ def _words_to_srt(words: list[dict[str, Any]]) -> str:
             continue
         gap = w_start - cur_end
         if (w_spk != cur_spk) or gap > 1.2 or len(cur_words) >= 14 or (
-            len(cur_words) >= 6 and cur_words[-1].endswith((".", "?", "!", "。", "？", "！"))
+            len(cur_words) >= 6 and cur_words[-1].endswith((".", "?", "!", "\u3002", "\uff1f", "\uff01"))
         ):
             flush()
             cur_start = w_start
@@ -370,7 +370,7 @@ def _words_to_srt(words: list[dict[str, Any]]) -> str:
 
 
 def _cmd_prompts() -> None:
-    print("\n内置 NVIDIA Nemotron 3.5 Transcribe 推荐 Prompt 预设 (--preset <name>):\n")
+    print("\nBuilt-in recommended NVIDIA Nemotron 3.5 Transcribe prompt presets (--preset <name>):\n")
     for name, info in LOCAL_PRESETS.items():
         flags = []
         if info["reasoning"]:
@@ -444,7 +444,7 @@ def _download_media_locally_and_upload_to_drive(
     """Run local `yt-dlp` to download audio or video, then upload to Google Drive via `colab upload`."""
     ytdlp_bin = shutil.which("yt-dlp")
     if not ytdlp_bin:
-        raise RuntimeError("本地未安装 `yt-dlp`，无法使用本地 yt-dlp 下载。")
+        raise RuntimeError("`yt-dlp` is not installed locally; local yt-dlp downloads are unavailable.")
 
     url = _clean_media_url(raw_url)
     target_drive_dir = _normalize_drive_dir(download_dir) if (download_dir or "").strip() else DEFAULT_YTDLP_DRIVE_DIR
@@ -463,7 +463,7 @@ def _download_media_locally_and_upload_to_drive(
             check=False,
         )
     except subprocess.TimeoutExpired:
-        diagnostic(f"[nemotron] 远端 mkdir 超时（内核可能正忙），继续直接上传到 {target_drive_dir}")
+        diagnostic(f"[nemotron] Remote mkdir timed out (the kernel may be busy); uploading directly to {target_drive_dir}")
 
     with tempfile.TemporaryDirectory(prefix="nemotron-ytdlp-") as stage_str:
         stage_dir = Path(stage_str)
@@ -499,8 +499,8 @@ def _download_media_locally_and_upload_to_drive(
             cmd.extend(["--cookies-from-browser", cookies_from_browser])
         cmd.append(url)
 
-        kind_str = "视频 (.mp4)" if download_video else f"音频 (.{fmt})"
-        log(f"正在本地执行 yt-dlp 下载{kind_str}: {url}")
+        kind_str = "video (.mp4)" if download_video else f"audio (.{fmt})"
+        log(f"Downloading {kind_str} locally with yt-dlp: {url}")
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=command_timeout(900), check=False)
         audio_files = sorted(
             f for f in stage_dir.iterdir()
@@ -508,9 +508,9 @@ def _download_media_locally_and_upload_to_drive(
         )
         if res.returncode != 0 and not audio_files:
             err_tail = (res.stderr or res.stdout or "").strip()[-800:]
-            raise RuntimeError(f"本地 yt-dlp 下载失败 ({url}): {err_tail}")
+            raise RuntimeError(f"Local yt-dlp download failed ({url}): {err_tail}")
         if not audio_files:
-            raise RuntimeError(f"yt-dlp 未下载到任何媒体文件: {url}")
+            raise RuntimeError(f"yt-dlp did not download any media file: {url}")
 
         uploaded: list[dict[str, Any]] = []
         for af in audio_files:
@@ -528,7 +528,7 @@ def _download_media_locally_and_upload_to_drive(
             base_name = f"{extractor}_{vid_id}_{title}" if title and title != vid_id else f"{extractor}_{vid_id}"
             dest_name = f"{base_name}{af.suffix.lower()}"
             remote_path = f"{target_drive_dir.rstrip('/')}/{dest_name}"
-            log(f"正在上传{kind_str}到 Google Drive ({session_name}): {remote_path}")
+            log(f"Uploading {kind_str} to Google Drive ({session_name}): {remote_path}")
             up_res = subprocess.run(
                 ["colab", "upload", "-s", session_name, str(af), remote_path],
                 capture_output=True,
@@ -538,7 +538,7 @@ def _download_media_locally_and_upload_to_drive(
             )
             if up_res.returncode != 0:
                 err = (up_res.stderr or up_res.stdout or "").strip()
-                raise RuntimeError(f"`colab upload` 失败 ({remote_path}): {err}")
+                raise RuntimeError(f"`colab upload` failed ({remote_path}): {err}")
             rel = remote_path.removeprefix("/content/drive/MyDrive/")
             uploaded.append({
                 "drive_path": remote_path,
@@ -639,12 +639,12 @@ def _list_drive_via_colab_cli(
 def _build_ls_drive_parser(parser=None):
     p = parser or argparse.ArgumentParser(
         prog=f"colabllm nemotron-transcribe ls-drive",
-        description="直接通过 Colab 已挂载的 /content/drive 查询网盘目录与音频文件（无需走公网 HTTP 隧道）",
+        description="Query Drive directories and audio files directly through Colab's mounted /content/drive (no public HTTP tunnel needed)",
     )
-    p.add_argument("path", nargs="?", default="", help="网盘相对路径、目录或通配符（如 'video' 或 'meetings/*.wav'，留空默认 MyDrive 根目录）")
-    p.add_argument("-r", "--recursive", action="store_true", default=False, help="递归搜索子目录中的音频文件（默认仅列出当前目录，避免全盘扫描超时）")
-    p.add_argument("--no-recursive", dest="recursive", action="store_false", help="仅列出当前层级目录")
-    p.add_argument("--json", action="store_true", help="输出原始 JSON")
+    p.add_argument("path", nargs="?", default="", help="Drive relative path, directory or glob (e.g. 'video' or 'meetings/*.wav'; empty means the MyDrive root)")
+    p.add_argument("-r", "--recursive", action="store_true", default=False, help="search subdirectories recursively for audio files (default lists only the current directory to avoid full-drive scan timeouts)")
+    p.add_argument("--no-recursive", dest="recursive", action="store_false", help="list only the current directory level")
+    p.add_argument("--json", action="store_true", help="print raw JSON")
     return p
 
 
@@ -661,14 +661,14 @@ def _cmd_ls_drive(argv) -> None:
             "audio_files": audio_files,
         }, indent=2, ensure_ascii=False))
         return
-    log(f"会话 [{SERVICE.name}] 网盘目录: {base_dir}")
+    log(f"Session [{SERVICE.name}] Drive directory: {base_dir}")
     if sub_dirs and not a.recursive:
-        print(f"\n  子目录 ({len(sub_dirs)} 个):")
+        print(f"\n  Subdirectories ({len(sub_dirs)}):")
         for d in sub_dirs:
             print(f"    📁 {d}/")
-    print(f"\n  音频文件 ({len(audio_files)} 个):")
+    print(f"\n  Audio files ({len(audio_files)}):")
     if not audio_files:
-        print("    (当前层级无音频文件；可指定子目录如 `ls-drive video` 或加 `-r` 递归搜索子目录)")
+        print("    (no audio files at this level; specify a subdirectory such as `ls-drive video` or add `-r` to search subdirectories)")
     else:
         for item in audio_files:
             print(f"    🎵 {item['rel_path']}   ({item['drive_path']})")
@@ -788,7 +788,7 @@ def _expand_tasks(cli_args: argparse.Namespace, base_url: str, token: str) -> li
     if cli_args.batch_file:
         raw_items.extend(_load_batch_manifest(Path(cli_args.batch_file)))
     if not raw_items:
-        die("请指定至少一个多媒体 URL（YouTube/Twitter 等）、网盘/本地音频路径，或使用 `--batch-file <文件>` 提供批量任务清单。")
+        die("Specify at least one media URL (YouTube/Twitter etc.), a Drive/local audio path, or a batch task list with `--batch-file <file>`.")
 
     expanded: list[dict[str, Any]] = []
     for item in raw_items:
@@ -822,7 +822,7 @@ def _expand_tasks(cli_args: argparse.Namespace, base_url: str, token: str) -> li
                 downloaded_files: list[dict[str, Any]] = []
                 if not use_local_ytdlp:
                     try:
-                        log(f"正在通过远端 yt-dlp 下载媒体列表到 Google Drive: {spec}")
+                        log(f"Downloading media list to Google Drive with remote yt-dlp: {spec}")
                         dl_res = _http_request(
                             f"{base_url}/api/ct/ytdlp-download",
                             token,
@@ -840,7 +840,7 @@ def _expand_tasks(cli_args: argparse.Namespace, base_url: str, token: str) -> li
                         )
                         downloaded_files = dl_res.get("files") or []
                     except Exception as e:
-                        warn(f"远端 Colab yt-dlp 下载失败 ({e})，自动切换为本地 yt-dlp 下载并上传到 Google Drive...")
+                        warn(f"Remote Colab yt-dlp download failed ({e}); switching to local yt-dlp and uploading to Google Drive...")
                         downloaded_files = _download_media_locally_and_upload_to_drive(
                             raw_url=spec,
                             session_name=SERVICE.name,
@@ -902,7 +902,7 @@ def _expand_tasks(cli_args: argparse.Namespace, base_url: str, token: str) -> li
                 it = lp.rglob("*") if cli_args.recursive else lp.glob("*")
                 matched = [f.resolve() for f in sorted(it) if f.is_file() and f.suffix.lower() in AUDIO_EXTS]
                 if not matched:
-                    warn(f"本地目录未找到支持的音频文件: {lp}")
+                    warn(f"No supported audio files found in local directory: {lp}")
                 for f in matched:
                     expanded.append({**item, "source_type": "local", "local_path": str(f), "label": str(f.relative_to(lp.resolve()))})
             else:
@@ -924,7 +924,7 @@ def _expand_tasks(cli_args: argparse.Namespace, base_url: str, token: str) -> li
                     res = _http_request(f"{base_url}/api/ct/drive-list?{qs}", token, timeout=60)
                     files = res.get("files") or []
                 if not files:
-                    die(f"在 Google Drive 上未找到匹配的音频文件: '{spec}'")
+                    die(f"No matching audio file found on Google Drive: '{spec}'")
                 for f in files:
                     expanded.append({
                         **item,
@@ -1122,7 +1122,7 @@ def _run_one_task(
             # Automatic fallback: if remote Colab yt-dlp was blocked or endpoint not updated yet,
             # download locally via yt-dlp, upload to Google Drive via `colab upload`, and transcribe!
             if is_url_task and ("yt-dlp" in str(e) or "HTTP 502" in str(e) or "HTTP 400" in str(e)):
-                warn(f"远端 yt-dlp 下载未成功 ({e})，自动切换为本地 yt-dlp 下载并上传到 Google Drive...")
+                warn(f"Remote yt-dlp download did not succeed ({e}); switching to local yt-dlp and uploading to Google Drive...")
                 uploaded = _download_media_locally_and_upload_to_drive(
                     raw_url=task["url"],
                     session_name=SERVICE.name,
@@ -1155,7 +1155,7 @@ def _run_one_task(
     chunk_ranges = _compute_local_chunk_ranges(lp, total_duration, max_chunk_sec=chunk_minutes * 60.0)
     is_multi_chunk = len(chunk_ranges) > 1
     if is_multi_chunk:
-        log(f"本地长音频 {lp.name} 时长 {total_duration / 60:.1f} 分钟，自动按静音点切分为 {len(chunk_ranges)} 段依次转写...")
+        log(f"Local long audio {lp.name} is {total_duration / 60:.1f} minutes; splitting at silences into {len(chunk_ranges)} chunks and transcribing them in order...")
 
     reasoning = cfg["reasoning"]
     timestamps = cfg["timestamps"]
@@ -1305,44 +1305,44 @@ def _save_local_result(res: dict[str, Any], out_dir: Path) -> list[str]:
 def _build_download_parser(parser=None):
     p = parser or argparse.ArgumentParser(
         prog=f"colabllm nemotron-transcribe download",
-        description="使用 yt-dlp 将多媒体 URL（YouTube、Twitter/X、Bilibili、TikTok 等）自动下载音频或完整视频并保存到 Google Drive 网盘",
+        description="Use yt-dlp to download audio or full video from media URLs (YouTube, Twitter/X, Bilibili, TikTok etc.) and save it to Google Drive",
     )
-    p.add_argument("urls", nargs="+", metavar="URL", help="一个或多个多媒体 URL（支持 YouTube、Twitter/X、Bilibili 等）")
+    p.add_argument("urls", nargs="+", metavar="URL", help="one or more media URLs (YouTube, Twitter/X, Bilibili etc.)")
     p.add_argument(
         "--download-dir",
         default="",
         metavar="DRIVE_DIR",
-        help="网盘保存目录（如 'video/voices'；留空默认保存到 /content/drive/MyDrive/colab-llm/nemotron-transcribe/audio/yt-dlp）",
+        help="Drive save directory (e.g. 'video/voices'; default /content/drive/MyDrive/colab-llm/nemotron-transcribe/audio/yt-dlp)",
     )
     p.add_argument(
         "--download-video",
         dest="download_video",
         action="store_true",
         default=False,
-        help="下载并保存完整视频文件 (.mp4) 到网盘（默认不加该参数时仅提取纯音频保存）",
+        help="download and save the full video (.mp4) to Drive (by default only the audio is extracted)",
     )
     p.add_argument(
         "--no-download-video",
         dest="download_video",
         action="store_false",
-        help="仅提取纯音频保存到网盘（默认）",
+        help="extract and save audio only (default)",
     )
     p.add_argument(
         "--audio-format",
         default="mp3",
         choices=["mp3", "m4a", "wav", "opus", "flac"],
-        help="仅提取音频时的保存格式（默认: mp3）",
+        help="save format when extracting audio only (default: mp3)",
     )
-    p.add_argument("--cookies-drive", metavar="DRIVE_PATH", help="Google Drive 上的 cookies.txt 路径（供远端 Colab yt-dlp 使用）")
-    p.add_argument("--cookies", metavar="LOCAL_FILE", help="本地 cookies.txt 文件路径（启用本地 yt-dlp 下载后上传到网盘）")
-    p.add_argument("--cookies-from-browser", metavar="BROWSER", help="从本地浏览器提取 Cookie（如 chrome / firefox）")
-    p.add_argument("--playlist", action="store_true", help="如果 URL 是播放列表，下载整个列表中的所有音视频（默认仅下载单条）")
-    p.add_argument("--force-download", action="store_true", help="强制重新下载，忽略网盘中已存在的同名缓存文件")
-    p.add_argument("--local-ytdlp", action="store_true", help="强制使用本地 yt-dlp 下载并通过 `colab upload` 上传到网盘")
-    p.add_argument("-i", "--instance", metavar="ID", help="指定使用某个实例（如 -i 1）")
-    p.add_argument("--url", help="覆盖服务公网 URL")
-    p.add_argument("--api-token", help="覆盖 Bearer API Token")
-    p.add_argument("--json", action="store_true", help="输出原始 JSON")
+    p.add_argument("--cookies-drive", metavar="DRIVE_PATH", help="path to cookies.txt on Google Drive (for remote Colab yt-dlp)")
+    p.add_argument("--cookies", metavar="LOCAL_FILE", help="local cookies.txt path (enables local yt-dlp download, then upload to Drive)")
+    p.add_argument("--cookies-from-browser", metavar="BROWSER", help="extract cookies from a local browser (e.g. chrome / firefox)")
+    p.add_argument("--playlist", action="store_true", help="if the URL is a playlist, download every item in it (default: single item only)")
+    p.add_argument("--force-download", action="store_true", help="force a re-download, ignoring cached files with the same name on Drive")
+    p.add_argument("--local-ytdlp", action="store_true", help="force a local yt-dlp download and upload to Drive with `colab upload`")
+    p.add_argument("-i", "--instance", metavar="ID", help="use a specific instance (e.g. -i 1)")
+    p.add_argument("--url", help="override the public service URL")
+    p.add_argument("--api-token", help="override the Bearer API token")
+    p.add_argument("--json", action="store_true", help="print raw JSON")
     return p
 
 
@@ -1365,7 +1365,7 @@ def _cmd_download(argv) -> None:
     for u in a.urls:
         if not use_local and base_url:
             try:
-                log(f"正在通过远端 Colab yt-dlp 下载到 Google Drive: {u}")
+                log(f"Downloading to Google Drive with remote Colab yt-dlp: {u}")
                 res = _http_request(
                     f"{base_url}/api/ct/ytdlp-download",
                     token,
@@ -1384,7 +1384,7 @@ def _cmd_download(argv) -> None:
                 all_saved.extend(items)
                 continue
             except Exception as e:
-                warn(f"远端 yt-dlp 下载失败 ({e})，切换为本地 yt-dlp 下载并上传到 Google Drive...")
+                warn(f"Remote yt-dlp download failed ({e}); switching to local yt-dlp and uploading to Google Drive...")
 
         items = _download_media_locally_and_upload_to_drive(
             raw_url=u,
@@ -1401,9 +1401,9 @@ def _cmd_download(argv) -> None:
     if a.json:
         print(json.dumps({"count": len(all_saved), "files": all_saved}, indent=2, ensure_ascii=False))
         return
-    log(f"共下载并保存 {len(all_saved)} 个媒体文件到 Google Drive:")
+    log(f"Downloaded and saved {len(all_saved)} media files to Google Drive:")
     for item in all_saved:
-        cached_tag = " (已缓存)" if item.get("cached") else ""
+        cached_tag = " (cached)" if item.get("cached") else ""
         icon = "🎬" if item.get("media_type") == "video" else "🎵"
         print(f"  {icon} {item.get('rel_path') or item['drive_path']}{cached_tag}")
         print(f"     drive_path: {item['drive_path']}")
@@ -1414,104 +1414,104 @@ def _cmd_download(argv) -> None:
 def _build_transcribe_parser(parser=None):
     p = parser or argparse.ArgumentParser(
         prog=f"colabllm nemotron-transcribe transcribe",
-        description="调用 Colab G4 上的 Nemotron-3.5-Transcribe-30B-A4B 处理多媒体 URL（YouTube/Twitter 等 via yt-dlp）、Google Drive 网盘或本地单个/批量音频文件",
+        description="Run Nemotron-3.5-Transcribe-30B-A4B on Colab G4 against media URLs (YouTube/Twitter etc. via yt-dlp), Google Drive, or single/batch local audio files",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument(
         "paths",
         nargs="*",
         metavar="AUDIO_OR_URL",
-        help="多媒体 URL（YouTube/Twitter/Bilibili 等，自动用 yt-dlp 下载到网盘）、Google Drive 网盘音频路径/目录/通配符（如 'video/voices'），或本地路径",
+        help="media URL (YouTube/Twitter/Bilibili etc., downloaded to Drive with yt-dlp), Google Drive audio path/directory/glob (e.g. 'video/voices'), or a local path",
     )
-    p.add_argument("-p", "--prompt", help="自定义用户指令 Prompt（未指定时默认使用 --preset 对应的官方推荐 Prompt）")
-    p.add_argument("--prompt-file", help="从本地文本文件读取用户 Prompt")
+    p.add_argument("-p", "--prompt", help="custom user prompt (defaults to the official recommended prompt for --preset)")
+    p.add_argument("--prompt-file", help="read the user prompt from a local text file")
     p.add_argument(
         "--preset",
         choices=list(LOCAL_PRESETS.keys()),
-        help="使用 NVIDIA 官方任务预设模板 (verbatim|clean|speaker|multispeaker|rich|near-field|structured|context|translate|lid|qa)",
+        help="use an official NVIDIA task preset (verbatim|clean|speaker|multispeaker|rich|near-field|structured|context|translate|lid|qa)",
     )
-    p.add_argument("--context", help="领域词汇 / 人名术语提示（用于上下文偏置转写 Context terms）")
-    p.add_argument("--lang", default="Chinese", help="当 --preset translate 时的目标翻译语言（默认: Chinese）")
-    p.add_argument("-s", "--system-prompt", help="自定义 System Prompt（转写/翻译建议留空；音频问答/助手任务可指定）")
-    p.add_argument("--reasoning", dest="reasoning", action="store_true", default=None, help="开启推理思考模式 (enable_thinking=True)")
-    p.add_argument("--no-reasoning", dest="reasoning", action="store_false", help="关闭推理思考模式 (enable_thinking=False)")
-    p.add_argument("-t", "--timestamps", action="store_true", default=None, help="开启 CTC 词级时间戳与说话人分离对齐 (同时生成 .srt 字幕)")
-    p.add_argument("-b", "--batch-file", metavar="FILE", help="批量任务清单文件 (.jsonl / .json / .csv / .tsv / .txt，每行可含独立 audio/url 与 prompt)")
-    p.add_argument("-r", "--recursive", action="store_true", default=False, help="传入目录时递归查找子目录中的音频（默认仅当前目录，加 -r 递归）")
-    p.add_argument("--no-recursive", dest="recursive", action="store_false", help="传入目录时不递归子目录")
-    p.add_argument("-j", "--concurrency", type=int, default=1, help="批量处理时的并发请求数（默认: 1）")
+    p.add_argument("--context", help="domain vocabulary / names and terms hint (context terms for biased transcription)")
+    p.add_argument("--lang", default="Chinese", help="target language for --preset translate (default: Chinese)")
+    p.add_argument("-s", "--system-prompt", help="custom system prompt (leave empty for transcription/translation; useful for audio Q&A / assistant tasks)")
+    p.add_argument("--reasoning", dest="reasoning", action="store_true", default=None, help="enable reasoning mode (enable_thinking=True)")
+    p.add_argument("--no-reasoning", dest="reasoning", action="store_false", help="disable reasoning mode (enable_thinking=False)")
+    p.add_argument("-t", "--timestamps", action="store_true", default=None, help="enable CTC word-level timestamps with speaker alignment (also writes .srt subtitles)")
+    p.add_argument("-b", "--batch-file", metavar="FILE", help="batch task list (.jsonl / .json / .csv / .tsv / .txt; each line may carry its own audio/url and prompt)")
+    p.add_argument("-r", "--recursive", action="store_true", default=False, help="search subdirectories for audio when a directory is given (default: current directory only)")
+    p.add_argument("--no-recursive", dest="recursive", action="store_false", help="do not recurse into subdirectories when a directory is given")
+    p.add_argument("-j", "--concurrency", type=int, default=1, help="concurrent requests in batch mode (default: 1)")
     p.add_argument(
         "--download-dir",
         default="",
         metavar="DRIVE_DIR",
-        help="当输入为多媒体 URL 时，yt-dlp 下载媒体保存到 Google Drive 的目录（如 'video/voices'；默认 colab-llm/nemotron-transcribe/audio/yt-dlp）",
+        help="Drive directory where yt-dlp saves media when the input is a media URL (e.g. 'video/voices'; default colab-llm/nemotron-transcribe/audio/yt-dlp)",
     )
     p.add_argument(
         "--download-video",
         dest="download_video",
         action="store_true",
         default=False,
-        help="当输入为多媒体 URL 时，下载完整视频文件 (.mp4) 到 Google Drive 网盘（默认仅提取纯音频保存）",
+        help="when the input is a media URL, download the full video (.mp4) to Google Drive (by default only the audio is extracted)",
     )
     p.add_argument(
         "--no-download-video",
         dest="download_video",
         action="store_false",
-        help="当输入为多媒体 URL 时，仅提取纯音频保存到网盘（默认）",
+        help="when the input is a media URL, extract and save audio only (default)",
     )
     p.add_argument(
         "--save-media-drive",
         dest="save_media_drive",
         action="store_true",
         default=True,
-        help="将 yt-dlp 下载的音视频文件持久化保存到 Google Drive 网盘（默认开启）",
+        help="keep the media downloaded by yt-dlp on Google Drive (default: on)",
     )
     p.add_argument(
         "--no-save-media-drive",
         dest="save_media_drive",
         action="store_false",
-        help="不将 yt-dlp 下载的音视频文件保存到 Google Drive（仅暂存在 Colab 本地 SSD 完成识别后自动清理）",
+        help="do not keep the media downloaded by yt-dlp on Google Drive (only staged on the Colab local SSD and cleaned up after recognition)",
     )
     p.add_argument(
         "--audio-format",
         default="mp3",
         choices=["mp3", "m4a", "wav", "opus", "flac"],
-        help="yt-dlp 提取音频保存的格式（默认: mp3）",
+        help="audio format for yt-dlp extraction (default: mp3)",
     )
-    p.add_argument("--cookies-drive", metavar="DRIVE_PATH", help="Google Drive 上的 cookies.txt 路径（供远端 Colab yt-dlp 下载需要登录的视频）")
-    p.add_argument("--cookies", metavar="LOCAL_FILE", help="本地 cookies.txt 文件路径（使用本地 yt-dlp 下载并自动上传到网盘）")
-    p.add_argument("--cookies-from-browser", metavar="BROWSER", help="从本地浏览器提取 Cookie（如 chrome / firefox，使用本地 yt-dlp 下载并上传到网盘）")
-    p.add_argument("--playlist", action="store_true", help="当输入 URL 为播放列表时，下载并转写播放列表中的全部条目（默认仅单条）")
-    p.add_argument("--force-download", action="store_true", help="强制 yt-dlp 重新下载 URL，忽略网盘上已有的同名音频缓存")
-    p.add_argument("--local-ytdlp", action="store_true", help="强制在本机执行 yt-dlp 下载并通过 `colab upload` 上传到 Google Drive 后再转写")
+    p.add_argument("--cookies-drive", metavar="DRIVE_PATH", help="path to cookies.txt on Google Drive (lets remote Colab yt-dlp download videos that require login)")
+    p.add_argument("--cookies", metavar="LOCAL_FILE", help="local cookies.txt path (downloads with local yt-dlp and uploads to Drive automatically)")
+    p.add_argument("--cookies-from-browser", metavar="BROWSER", help="extract cookies from a local browser (e.g. chrome / firefox; downloads with local yt-dlp and uploads to Drive)")
+    p.add_argument("--playlist", action="store_true", help="if the input URL is a playlist, download and transcribe every entry (default: single item only)")
+    p.add_argument("--force-download", action="store_true", help="force yt-dlp to re-download the URL, ignoring cached audio with the same name on Drive")
+    p.add_argument("--local-ytdlp", action="store_true", help="force yt-dlp to run on this machine and upload to Google Drive with `colab upload` before transcribing")
     p.add_argument(
         "--save-drive",
         nargs="?",
         const="@same",
         metavar="DRIVE_DIR",
-        help="将转写结果 (.txt / .nemotron.json / .srt) 直接保存到 Google Drive（不带参数保存在原音频同目录，或指定网盘目标目录）",
+        help="save transcription results (.txt / .nemotron.json / .srt) directly to Google Drive (without a value: next to the source audio; or give a Drive target directory)",
     )
-    p.add_argument("-o", "--output", metavar="FILE", help="将结果保存到本地指定文件（单文件存文本/JSON/SRT，多文件存 .jsonl/.json）")
-    p.add_argument("-O", "--output-dir", metavar="DIR", help="将每个音频的 .txt / .nemotron.json / .srt 及 batch_summary.jsonl 保存到本地目录")
-    p.add_argument("--drive", action="store_true", help="强制将输入路径作为 Google Drive 网盘路径解析")
-    p.add_argument("--local", action="store_true", help="强制将输入路径作为本地计算机路径解析")
-    p.add_argument("--normalize-audio", action="store_true", help="在远端用 ffmpeg 统一重采样为 16kHz 单声道 WAV 后再送入模型")
+    p.add_argument("-o", "--output", metavar="FILE", help="save results to a local file (text/JSON/SRT for a single file, .jsonl/.json for several)")
+    p.add_argument("-O", "--output-dir", metavar="DIR", help="save each audio's .txt / .nemotron.json / .srt plus batch_summary.jsonl to a local directory")
+    p.add_argument("--drive", action="store_true", help="force input paths to be resolved as Google Drive paths")
+    p.add_argument("--local", action="store_true", help="force input paths to be resolved as local paths")
+    p.add_argument("--normalize-audio", action="store_true", help="resample to 16 kHz mono WAV with ffmpeg on the remote side before sending to the model")
     p.add_argument(
         "--chunk-minutes",
         type=float,
         default=40.0,
         metavar="MINUTES",
-        help="超长音频自动静音对齐切片阈值（分钟，默认: 40；超过该时长自动按静音点切分并无缝拼接文本与时间戳，传 0 关闭切片）",
+        help="silence-aligned chunking threshold for very long audio (minutes, default: 40; longer audio is split at silences and text/timestamps are stitched seamlessly; 0 disables chunking)",
     )
-    p.add_argument("--temperature", type=float, help="覆盖采样温度（默认: 转写 0.0 / 推理 0.6）")
-    p.add_argument("--max-tokens", type=int, help="覆盖最大生成 token 数（默认: 转写 16384 / 推理 20480）")
-    p.add_argument("--timeout", type=nonnegative_seconds, default=3600, help="单个音频任务请求超时时间（秒，0 为不限，默认: 3600）")
-    p.add_argument("-i", "--instance", metavar="ID", help="指定使用某个实例（如 -i 1 或 -i 2）")
-    p.add_argument("--instances", metavar="ID1,ID2", help="指定多个实例并行分摊批量任务（如 --instances 1,2,3）")
-    p.add_argument("-A", "--all-instances", action="store_true", help="自动发现所有运行中的实例并并行分摊批量任务")
-    p.add_argument("--url", help="覆盖服务公网 URL")
-    p.add_argument("--api-token", help="覆盖 Bearer API Token")
-    p.add_argument("--json", action="store_true", help="向标准输出打印完整 JSON 结果")
+    p.add_argument("--temperature", type=float, help="override the sampling temperature (default: 0.0 for transcription / 0.6 for reasoning)")
+    p.add_argument("--max-tokens", type=int, help="override the maximum generated tokens (default: 16384 for transcription / 20480 for reasoning)")
+    p.add_argument("--timeout", type=nonnegative_seconds, default=3600, help="request timeout per audio task (seconds, 0 for unlimited, default: 3600)")
+    p.add_argument("-i", "--instance", metavar="ID", help="use a specific instance (e.g. -i 1 or -i 2)")
+    p.add_argument("--instances", metavar="ID1,ID2", help="spread batch tasks across several instances in parallel (e.g. --instances 1,2,3)")
+    p.add_argument("-A", "--all-instances", action="store_true", help="discover all running instances and spread batch tasks across them in parallel")
+    p.add_argument("--url", help="override the public service URL")
+    p.add_argument("--api-token", help="override the Bearer API token")
+    p.add_argument("--json", action="store_true", help="print the full JSON result to standard output")
     return p
 
 
@@ -1525,9 +1525,9 @@ def _cmd_transcribe(argv) -> None:
         a.prompt = Path(a.prompt_file).read_text(encoding="utf-8").strip()
     if a.output and Path(a.output).suffix.lower() == ".srt" and not a.timestamps:
         if a.timestamps is False:
-            raise UsageError("导出 .srt 字幕需要开启 --timestamps（或使用 --preset speaker）")
+            raise UsageError("Exporting .srt subtitles requires --timestamps (or --preset speaker)")
         a.timestamps = True
-        diagnostic("[nemotron] 输出为 .srt，已自动开启 --timestamps 词级时间戳")
+        diagnostic("[nemotron] Output is .srt; word-level --timestamps enabled automatically")
 
     endpoints = _get_endpoint_pool(a)
     first_url, first_token = endpoints[0][1], endpoints[0][2]
@@ -1535,7 +1535,7 @@ def _cmd_transcribe(argv) -> None:
     total = len(tasks)
     workers = max(a.concurrency, len(endpoints)) if len(endpoints) > 1 and a.concurrency == 1 else max(1, a.concurrency)
     ep_desc = ", ".join(f"{name}({url})" for name, url, _ in endpoints)
-    log(f"准备执行 {total} 个音频任务 (并发数={workers}, 实例数={len(endpoints)}: {ep_desc})")
+    log(f"Preparing {total} audio tasks (concurrency={workers}, instances={len(endpoints)}: {ep_desc})")
 
     results: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
@@ -1561,19 +1561,19 @@ def _cmd_transcribe(argv) -> None:
                     hdr = f"[{idx}/{total}]{inst_tag} {res['label']} ({res.get('elapsed_sec', 0):.2f}s)"
                     print(f"\n=== {hdr} ===", flush=True)
                     if res.get("source_url") and res.get("drive_path"):
-                        log(f"媒体 URL 已下载至网盘: {res['drive_path']} (来源: {res['source_url']})")
+                        log(f"Media URL downloaded to Drive: {res['drive_path']} (source: {res['source_url']})")
                     if (res.get("chunk_count") or 1) > 1:
                         dur_m = (res.get("duration_sec") or 0) / 60.0
-                        log(f"超长音频 ({dur_m:.1f} 分钟) 已自动按静音点切分为 {res['chunk_count']} 段并完成文本与时间戳拼接")
+                        log(f"Long audio ({dur_m:.1f} minutes) was split at silences into {res['chunk_count']} chunks and text/timestamps were stitched together")
                     print(res.get("text") or "", flush=True)
                     if res.get("saved_drive_files"):
-                        log(f"已写入网盘: {', '.join(res['saved_drive_files'])}")
+                        log(f"Written to Drive: {', '.join(res['saved_drive_files'])}")
                     if res.get("saved_local_files"):
-                        log(f"已写入本地: {', '.join(res['saved_local_files'])}")
+                        log(f"Written locally: {', '.join(res['saved_local_files'])}")
             except Exception as e:
                 err_rec = {"index": idx, "instance": inst_name, "label": label, "error": str(e), "task": task}
                 errors.append(err_rec)
-                warn(f"[{idx}/{total}] [{inst_name}] {label} 失败: {e}")
+                warn(f"[{idx}/{total}] [{inst_name}] {label} failed: {e}")
 
     results.sort(key=lambda r: r.get("index", 0))
 
@@ -1582,7 +1582,7 @@ def _cmd_transcribe(argv) -> None:
         with summary_path.open("w", encoding="utf-8") as f:
             for r in results:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        log(f"批量汇总已保存至: {summary_path}")
+        log(f"Batch summary saved to: {summary_path}")
 
     if a.output:
         out_file = Path(a.output)
@@ -1592,7 +1592,7 @@ def _cmd_transcribe(argv) -> None:
             out_file.write_text(txt + ("\n" if not txt.endswith("\n") else ""), encoding="utf-8")
         elif out_file.suffix.lower() == ".srt":
             if len(results) != 1 or not results[0].get("srt"):
-                die("无法写入 .srt：仅支持单个音频，且服务端需返回词级时间戳（--timestamps）")
+                die("Cannot write .srt: only a single audio is supported, and the server must return word-level timestamps (--timestamps)")
             out_file.write_text(results[0]["srt"], encoding="utf-8")
         elif out_file.suffix.lower() == ".jsonl":
             with out_file.open("w", encoding="utf-8") as f:
@@ -1601,14 +1601,14 @@ def _cmd_transcribe(argv) -> None:
         else:
             payload_out = results[0] if len(results) == 1 else {"results": results, "errors": errors}
             out_file.write_text(json.dumps(payload_out, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        log(f"输出已保存至: {out_file}")
+        log(f"Output saved to: {out_file}")
 
     if a.json:
         out_obj = results[0] if (len(results) == 1 and not errors) else {"results": results, "errors": errors}
         print(json.dumps(out_obj, indent=2, ensure_ascii=False))
 
     if errors:
-        die(f"完成 {len(results)}/{total} 个任务，{len(errors)} 个任务失败。")
+        die(f"Finished {len(results)}/{total} tasks; {len(errors)} tasks failed.")
 
 
 

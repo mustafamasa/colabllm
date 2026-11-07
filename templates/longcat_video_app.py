@@ -101,20 +101,20 @@ def main():
     def generate(task, prompt, negative, image, video, resolution, width, height,
                  frames, steps, guidance, distill, seed, segments):
         if not prompt.strip():
-            raise gr.Error("请输入视频描述")
-        if task == "图生视频" and not image:
-            raise gr.Error("请上传参考图片")
-        if task == "视频续写" and not video:
-            raise gr.Error("请上传参考视频")
+            raise gr.Error("Enter a video description")
+        if task == "Image to Video" and not image:
+            raise gr.Error("Upload a reference image")
+        if task == "Video Continuation" and not video:
+            raise gr.Error("Upload a reference video")
         width, height, frames = int(width), int(height), int(frames)
         if not (256 <= width <= 1024 and 256 <= height <= 1024 and 17 <= frames <= 161):
-            raise gr.Error("宽高范围为 256–1024，帧数范围为 17–161")
+            raise gr.Error("Width/height must be 256-1024 and frames 17-161")
         if width % 16 or height % 16 or frames % 4 != 1:
-            raise gr.Error("宽高须为 16 的倍数，帧数须为 4n+1")
-        if task not in ("文生视频", "图生视频", "视频续写") or resolution not in ("480p", "720p"):
-            raise gr.Error("请选择有效的生成模式与分辨率")
+            raise gr.Error("Width/height must be multiples of 16 and frames must be 4n+1")
+        if task not in ("Text to Video", "Image to Video", "Video Continuation") or resolution not in ("480p", "720p"):
+            raise gr.Error("Choose a valid generation mode and resolution")
         if not (1 <= int(segments) <= 10 and 1 <= int(steps) <= 100 and 1 <= float(guidance) <= 10):
-            raise gr.Error("生成段数、步数或引导强度超出范围")
+            raise gr.Error("Segments, steps or guidance scale out of range")
         seed = int(seed)
         if seed < 0:
             seed = int.from_bytes(os.urandom(4), "little")
@@ -128,7 +128,7 @@ def main():
                               num_frames=frames, num_inference_steps=16 if distill else int(steps),
                               guidance_scale=1.0 if distill else float(guidance),
                               use_distill=distill, generator=generator)
-                if task == "文生视频":
+                if task == "Text to Video":
                     if int(segments) > 1:
                         from PIL import Image
                         # Continuation uses upstream aspect buckets: select the same
@@ -138,7 +138,7 @@ def main():
                             scale_factor_spatial=pipe.vae_scale_factor_spatial * 2,
                         )
                     result = pipe.generate_t2v(height=height, width=width, **kwargs)[0]
-                elif task == "图生视频":
+                elif task == "Image to Video":
                     result = pipe.generate_i2v(image=load_image(image), resolution=resolution, **kwargs)[0]
                 else:
                     import cv2
@@ -147,7 +147,7 @@ def main():
                     cap.release()
                     source = load_video(video)[::max(1, round(fps / 15))]
                     if len(source) < 13:
-                        raise gr.Error("参考视频须至少包含 13 帧（按 15 fps 采样）")
+                        raise gr.Error("The reference video needs at least 13 frames (sampled at 15 fps)")
                     result = pipe.generate_vc(video=source, resolution=resolution, num_cond_frames=13,
                                               use_kv_cache=True, offload_kv_cache=True,
                                               enhance_hf=not distill, **kwargs)[0]
@@ -175,29 +175,29 @@ def main():
                 torch.cuda.empty_cache()
 
     with gr.Blocks(title="LongCat-Video") as demo:
-        gr.Markdown("# LongCat-Video\n文生视频 · 图生视频 · 视频续写。生成结果自动保存到 Google Drive。")
+        gr.Markdown("# LongCat-Video\nText to video · image to video · video continuation. Results are saved to Google Drive automatically.")
         with gr.Row():
             with gr.Column():
-                task = gr.Dropdown(["文生视频", "图生视频", "视频续写"], value="文生视频", label="生成模式")
-                prompt = gr.Textbox(label="视频描述", lines=4, placeholder="描述画面、人物动作和镜头运动，建议使用英文")
-                negative = gr.Textbox(label="负面描述", value="blurry, low quality, static, subtitles")
-                image = gr.Image(type="filepath", label="参考图片（图生视频）")
-                video = gr.Video(label="参考视频（视频续写）")
-                distill = gr.Checkbox(value=True, label="快速模式（16 步）")
-                with gr.Accordion("生成参数", open=False):
-                    resolution = gr.Dropdown(["480p", "720p"], value="480p", label="图片 / 视频续写 / 多段生成分辨率")
-                    width = gr.Slider(256, 1024, value=832, step=16, label="文生视频宽度")
-                    height = gr.Slider(256, 1024, value=480, step=16, label="文生视频高度")
-                    frames = gr.Slider(17, 161, value=93, step=4, label="每段帧数（15 fps）")
-                    steps = gr.Slider(1, 100, value=50, step=1, label="标准模式采样步数")
-                    guidance = gr.Slider(1, 10, value=4, step=0.5, label="标准模式引导强度")
-                    seed = gr.Number(value=42, precision=0, label="随机种子（-1 为随机）")
-                    segments = gr.Slider(1, 10, value=1, step=1, label="连续生成段数")
-                submit = gr.Button("生成视频", variant="primary")
+                task = gr.Dropdown(["Text to Video", "Image to Video", "Video Continuation"], value="Text to Video", label="Generation mode")
+                prompt = gr.Textbox(label="Video description", lines=4, placeholder="Describe the scene, character actions and camera movement (English recommended)")
+                negative = gr.Textbox(label="Negative prompt", value="blurry, low quality, static, subtitles")
+                image = gr.Image(type="filepath", label="Reference image (image to video)")
+                video = gr.Video(label="Reference video (video continuation)")
+                distill = gr.Checkbox(value=True, label="Fast mode (16 steps)")
+                with gr.Accordion("Generation parameters", open=False):
+                    resolution = gr.Dropdown(["480p", "720p"], value="480p", label="Resolution for image / continuation / multi-segment generation")
+                    width = gr.Slider(256, 1024, value=832, step=16, label="Text-to-video width")
+                    height = gr.Slider(256, 1024, value=480, step=16, label="Text-to-video height")
+                    frames = gr.Slider(17, 161, value=93, step=4, label="Frames per segment (15 fps)")
+                    steps = gr.Slider(1, 100, value=50, step=1, label="Sampling steps (standard mode)")
+                    guidance = gr.Slider(1, 10, value=4, step=0.5, label="Guidance scale (standard mode)")
+                    seed = gr.Number(value=42, precision=0, label="Random seed (-1 for random)")
+                    segments = gr.Slider(1, 10, value=1, step=1, label="Number of consecutive segments")
+                submit = gr.Button("Generate video", variant="primary")
             with gr.Column():
-                result = gr.Video(label="生成结果")
-                download = gr.File(label="下载视频")
-                metadata = gr.JSON(label="生成信息")
+                result = gr.Video(label="Result")
+                download = gr.File(label="Download video")
+                metadata = gr.JSON(label="Generation info")
         submit.click(generate, [task, prompt, negative, image, video, resolution, width, height,
                                frames, steps, guidance, distill, seed, segments],
                      [result, download, metadata], api_name="generate", concurrency_limit=1)

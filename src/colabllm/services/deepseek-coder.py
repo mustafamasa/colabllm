@@ -181,9 +181,9 @@ def _api_get_json(base_url: str, path: str, token: str, timeout: float) -> Any:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
         detail = err.read().decode("utf-8", errors="replace")[:300]
-        raise UsageError(f"远端请求失败 ({path} -> HTTP {err.code}): {detail}") from err
+        raise UsageError(f"Remote request failed ({path} -> HTTP {err.code}): {detail}") from err
     except urllib.error.URLError as err:
-        raise UsageError(f"无法连接 {base_url}{path}: {err.reason}") from err
+        raise UsageError(f"Cannot connect to {base_url}{path}: {err.reason}") from err
 
 
 def cmd_models(args: argparse.Namespace) -> int:

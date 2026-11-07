@@ -1,130 +1,130 @@
-# 项目全局 FRP 隧道
+# Project-wide FRP tunnel
 
-默认后端仍为 Cloudflare Tunnel。全局启用 FRP 后，所有服务及实例的下一次 `up` 自动使用 FRP，由指定服务器上的 Caddy 提供 HTTPS。配置不会切换或重启已经运行的服务。
+The default backend is still Cloudflare Tunnel. Once FRP is enabled globally, the next `up` of every service and instance uses FRP automatically, with HTTPS provided by Caddy on the configured server. Configuration changes never switch or restart services that are already running.
 
-## 配置与服务端安装
+## Configuration and server installation
 
-本机需要已登录的 `cf` CLI 和可用的 SSH 密钥/SSH config。服务端需要公网 IP、Linux amd64/arm64、Python 3、systemd、root 或免密 sudo。公网 TCP 7000 用于接收 Colab 连接，80/443 用于网站和 HTTPS 证书；安全组/防火墙需允许这些端口。
+Locally you need a logged-in `cf` CLI and a working SSH key/SSH config. The server needs a public IP, Linux amd64/arm64, Python 3, systemd, and root or passwordless sudo. Public TCP 7000 receives Colab connections and 80/443 serve the sites and HTTPS certificates; security groups/firewalls must allow these ports.
 
 ```bash
 cf auth login
 
-# 替换示例 IP 和域名；--ssh 支持 ~/.ssh/config 的别名、端口、密钥和跳板
+# Replace the sample IP and domain; --ssh supports aliases, ports, keys and jump hosts from ~/.ssh/config
 colabllm frp-config \
   --server-ip 203.0.113.10 \
   --ssh root@frpip \
   --base-domain example.com
 
-colabllm frp-config       # 查看全局配置，不展示 Token
-colabllm frp-status       # SSH 检查 frps、Caddy 和路由
+colabllm frp-config       # show the global configuration without the token
+colabllm frp-status       # check frps, Caddy and routes over SSH
 ```
 
-命令先验证 Cloudflare Zone 权限，再通过 SSH 检查监听进程、systemd 单元、配置路径和已安装二进制；不会仅因 7000 被占用就认定冲突。
+The command first verifies Cloudflare zone permissions, then checks listening processes, systemd units, configuration paths and installed binaries over SSH; port 7000 being in use is not treated as a conflict by itself.
 
-- 已有 frps 正在运行：识别包括 `frpcolab-frps` 在内的自定义二进制/服务名称，读取原 Token、TLS 证书、端口限制和版本，兼容时直接复用，不重启或改写现有 frps。
-- 已有 frps 已安装但停止：检查原配置后，启动原 systemd 单元。
-- 仅安装了二进制：优先复用它创建项目专属配置/服务，不重复下载。
-- 尚未安装：安装 frps 0.61.2、Caddy 2.10.2，校验官方发布的哈希，再生成配置和 systemd 服务。
+- An frps is already running: custom binary/service names (including `frpcolab-frps`) are recognized; the existing token, TLS certificate, port limits and version are read and reused when compatible, without restarting or rewriting the existing frps.
+- An frps is installed but stopped: after checking its configuration, the existing systemd unit is started.
+- Only the binary is installed: it is reused to create a project-specific configuration/service, without downloading again.
+- Nothing installed: frps 0.61.2 and Caddy 2.10.2 are installed after verifying the official release hashes, then the configuration and systemd services are generated.
 
-Colab frpc 下载与服务端匹配的稳定版本（要求 >= 0.61.0）；既有证书使用 DNS SAN 时，即使通过 IP 连接，也使用证书中的 DNS 名称校验 TLS。服务端私钥和原 Token 都不会替换。
+Colab frpc downloads a stable version matching the server (>= 0.61.0 required); when the existing certificate uses a DNS SAN, TLS is verified against that DNS name even when connecting by IP. The server private key and the existing token are never replaced.
 
-既有 frps 须使用 Token 认证、显式 TLS 证书和回环代理监听。自动复用不支持 OIDC 或要求客户端证书的 mTLS 配置；遇到这些配置会说明原因，不自动修改共享服务。7000 由其他程序占用时仍会明确报错。首次配置必须同时提供 IP、SSH 目标和主域名。
+An existing frps must use token authentication, an explicit TLS certificate and loopback proxy listeners. Automatic reuse does not support OIDC or mTLS configurations that require client certificates; such configurations are reported with the reason and the shared service is not modified. Port 7000 used by another program is still reported as an error. The first configuration must provide the IP, the SSH target and the base domain together.
 
-已有 Caddy 时，从监听进程或已安装 systemd 单元定位二进制和 Caddyfile，包括自定义路径和服务名。备份原文件，只追加项目站点目录的 import；保留文件权限和所有者，先校验再 reload，失败恢复原配置。已有 Caddy 二进制不会重复安装。JSON/API-only 配置或不明确的多实例布局会明确报错。新安装的 Caddy 使用独立的 `colabsvc-caddy.service`，不替换其他程序。
+With an existing Caddy, the binary and Caddyfile are located from the listening process or the installed systemd unit, including custom paths and service names. The original file is backed up and only an import of the project site directory is appended; file permissions and ownership are kept, the configuration is validated before reload, and the original is restored on failure. An existing Caddy binary is never reinstalled. JSON/API-only configurations or ambiguous multi-instance layouts are reported as errors. A newly installed Caddy uses its own `colabsvc-caddy.service` and does not replace other programs.
 
-更改已部署服务器的 IP/监听端口需要显式迁移，命令不会直接重启共享 frps 并打断所有连接。
+Changing the IP/listening port of a deployed server requires an explicit migration; the command never restarts a shared frps directly and interrupts all connections.
 
-## 运行时使用
+## Using it with runtimes
 
 ```bash
-# 全局 FRP 已配置：自动走 FRP，域名为 indextts.example.com
+# Global FRP configured: FRP is used automatically, hostname indextts.example.com
 colabllm indextts up
 
-# 多实例保留原来的别名和实例后缀，例如 qwen-2.example.com
+# Multiple instances keep the original alias and instance suffix, e.g. qwen-2.example.com
 colabllm qwen-flash up -i 2
 
-# 单次选择后端，或覆盖本次服务域名
+# Choose the backend for one start, or override this start's service hostname
 colabllm longcat-avatar up --transport frp --domain avatar.example.com
 colabllm longcat-avatar up --transport cloudflare
 colabllm longcat-avatar up --quick-tunnel
 
-# 关闭全局 FRP；主域名仍保留，因此之后默认是 Cloudflare 固定域名
+# Disable global FRP; the base domain is kept, so later starts default to a fixed Cloudflare domain
 colabllm frp-config --disable
 
-# 如需恢复默认 Cloudflare 动态 URL，再清除主域名及环境变量覆盖
+# To go back to the default dynamic Cloudflare URL, also clear the base domain and any environment override
 colabllm tunnel-config --clear
 ```
 
-选择规则：`--quick-tunnel` 强制 Cloudflare 动态 URL；`--transport` 覆盖全局后端；否则启用 FRP 时用 FRP，未启用时用 Cloudflare。`--quick-tunnel` 与 `--transport frp` 不能同时使用。`--base-domain`、`--domain` 和 `COLABSVC_BASE_DOMAIN` 的主机名覆盖规则仍适用。
+Selection rules: `--quick-tunnel` forces a dynamic Cloudflare URL; `--transport` overrides the global backend; otherwise FRP is used when enabled and Cloudflare when not. `--quick-tunnel` and `--transport frp` cannot be combined. The hostname override rules of `--base-domain`, `--domain` and `COLABSVC_BASE_DOMAIN` still apply.
 
-显式选择 FRP 时，必须已经通过 `frp-config` 完成服务器配置；配置不完整或连接失败不会自动降级到其他后端。
+When FRP is chosen explicitly, the server must already be configured with `frp-config`; an incomplete configuration or a connection failure never falls back to another backend automatically.
 
-## 数据路径与认证
+## Data path and authentication
 
 ```text
-客户端 -> HTTPS :443 / Caddy（FRP 服务器）
-       -> 127.0.0.1:独立映射端口 / frps
-       -> TLS 隧道 / Colab frpc
-       -> Colab 原有认证入口 -> 模型服务
+client -> HTTPS :443 / Caddy (FRP server)
+       -> 127.0.0.1:dedicated mapped port / frps
+       -> TLS tunnel / Colab frpc
+       -> Colab's existing auth entry point -> model service
 ```
 
-Colab frpc 主动连接服务器 7000；FRP 的映射端口固定分配在 20000–29999，仅监听服务器回环地址。分配由服务端加锁管理，使用项目 ID 和服务/实例名称区分，重启复用原端口。
+Colab frpc connects out to the server on 7000; FRP mapped ports are allocated from 20000-29999 and listen only on the server loopback address. Allocation is managed by the server under a lock, keyed by project ID and service/instance name, and restarts reuse the same port.
 
-本机通过 `cf` 自动创建或更新 A/AAAA 记录，默认 `proxied=false`（DNS only）。域名解析到 FRP 服务器，Caddy 自动申请/续期公开 HTTPS 证书，适配 WebSocket、SSE 和大文件。FRP 的 7000 连接直接使用服务器 IP。
+Locally, `cf` creates or updates A/AAAA records automatically, with `proxied=false` (DNS only) by default. The hostname resolves to the FRP server, and Caddy obtains/renews public HTTPS certificates automatically, supporting WebSocket, SSE and large files. FRP's 7000 connection uses the server IP directly.
 
-DNS 更新仅接受该服务拥有的记录；其他用途的记录会导致冲突报错。Caddy 路由更新失败时回滚站点和本次 DNS 修改。
+DNS updates only touch records owned by the service; records used for anything else cause a conflict error. If a Caddy route update fails, the site and this run's DNS changes are rolled back.
 
-frpc 使用 Token 和固定信任证书验证服务器，服务器私钥不离开服务器。FRP 不是服务认证的替代：已有 Bearer、Basic Auth 和应用登录继续生效。Notebook 先检查认证层，再注册隧道；隧道单元验证公开 TLS 响应，服务原来的健康检查继续决定 `CT_READY`。大型模型加载过程中暂时出现 502 不会阻止后续加载。
+frpc verifies the server with the token and a pinned trusted certificate; the server private key never leaves the server. FRP does not replace service authentication: existing Bearer, Basic Auth and app logins stay in effect. The notebook checks the auth layer first, then registers the tunnel; the tunnel cell verifies the public TLS response, and the service's own health check still decides `CT_READY`. A temporary 502 while a large model loads does not block the rest of the loading.
 
-frpc 加入现有 watchdog，退出后自动重启；网络断开时由 frpc 自动重连。所有 Notebook 共用同一套实现。
+frpc joins the existing watchdog and is restarted when it exits; frpc reconnects automatically after network drops. All notebooks share the same implementation.
 
-## 配置、状态与清理
+## Configuration, state and cleanup
 
-- 全局主域名和 FRP 元数据：`~/.colabllm/tunnel-config.json`。
-- 客户端 Token/信任证书：`~/.colabllm/frp/<服务器标识>.json`，权限 `0600`。
-- 每个运行时的后端和独立资源记录：`~/.colabllm/services/<service>/state.json`，权限 `0600`。
-- 服务端 frps 和专用 Caddy 配置：`/etc/colabsvc-frp/`。
-- 路由注册表和证书数据：`/var/lib/colabsvc-frp/`。
-- 新装二进制：`/usr/local/lib/colabsvc-frp/`。
-- 已有标准 Caddy 的项目站点：`/etc/caddy/colabsvc-frp/`。
-- Colab 客户端日志：`/content/ct/frpc.log`，配置文件 `/content/ct/frpc.toml` 权限 `0600`。
+- Global base domain and FRP metadata: `~/.colabllm/tunnel-config.json`.
+- Client token/trusted certificate: `~/.colabllm/frp/<server-id>.json`, permissions `0600`.
+- Each runtime's backend and owned resource records: `~/.colabllm/services/<service>/state.json`, permissions `0600`.
+- Server frps and dedicated Caddy configuration: `/etc/colabsvc-frp/`.
+- Route registry and certificate data: `/var/lib/colabsvc-frp/`.
+- Newly installed binaries: `/usr/local/lib/colabsvc-frp/`.
+- Project sites for an existing standard Caddy: `/etc/caddy/colabsvc-frp/`.
+- Colab client log: `/content/ct/frpc.log`; configuration file `/content/ct/frpc.toml` with permissions `0600`.
 
 ```bash
-colabllm indextts down                   # 保留路由和 DNS，便于重启
-colabllm indextts down --delete-tunnel   # 删除该实例的项目路由/DNS
+colabllm indextts down                   # keep the route and DNS for a quick restart
+colabllm indextts down --delete-tunnel   # delete this instance's project route/DNS
 ```
 
-清理根据实例保存的后端资源操作，不根据后来修改的全局配置猜测。Cloudflare 和 FRP 资源分别记录；只删除仍匹配所有权的 DNS 记录。更换该实例的 FRP 服务器或域名前，需先使用 `down --delete-tunnel` 清理旧路由。共享 frps/Caddy 不随单个实例停止而卸载。
+Cleanup acts on the backend resources saved for the instance and never guesses from a global configuration changed later. Cloudflare and FRP resources are recorded separately; only DNS records whose ownership still matches are deleted. Before changing an instance's FRP server or domain, clean up the old route with `down --delete-tunnel`. A shared frps/Caddy is never uninstalled when a single instance stops.
 
-`frp-status` 会显示实际复用的单元、版本和复用状态。例如已有服务可能是 `frpcolab-frps.service` 和 `caddy.service`，而非项目新建的服务名。
+`frp-status` shows the units, versions and reuse state actually in use. For example, an existing setup may use `frpcolab-frps.service` and `caddy.service` instead of the service names the project would create.
 
-服务器诊断（按 `frp-status` 返回的实际单元调整）：
+Server diagnostics (adjust to the actual units reported by `frp-status`):
 
 ```bash
 ssh root@frpip 'systemctl status colabsvc-frps'
 ssh root@frpip 'journalctl -u colabsvc-frps -n 80 --no-pager'
-# 新安装的 Caddy 使用 colabsvc-caddy；复用标准安装时使用 caddy
+# A newly installed Caddy uses colabsvc-caddy; a reused standard installation uses caddy
 ssh root@frpip 'journalctl -u colabsvc-caddy -n 80 --no-pager'
 ```
 
-## 验证
+## Verification
 
-`tests/test_frp_backend.py` 验证配置、DNS 所有权、回滚、幂等安装和后端切换清理；`tests/test_frp_transport.py` 使用真实 frps/frpc/Caddy 在本机非特权端口验证 HTTPS、FRP TLS、认证、SSE、WebSocket、重连及错误凭据拒绝。
+`tests/test_frp_backend.py` verifies configuration, DNS ownership, rollback, idempotent installation and backend-switch cleanup; `tests/test_frp_transport.py` uses real frps/frpc/Caddy on unprivileged local ports to verify HTTPS, FRP TLS, authentication, SSE, WebSocket, reconnection and rejection of wrong credentials.
 
 ```bash
 python tests/test_frp_backend.py
 COLABSVC_FRP_TEST_BIN=/path/to/verified/binaries python tests/test_frp_transport.py
 ```
 
-本地测试使用专用测试证书。另已在既有 frps 0.71.1 / Caddy 2.6.2 的服务器上完成原服务复用及真实 TLS 隧道请求往返验证，两个原进程 PID 保持不变；公网 DNS 和 ACME 签发仍需在具体运行时启动时验证。
+Local tests use dedicated test certificates. Reuse of existing services and a real TLS tunnel request round trip were also verified on a server with an existing frps 0.71.1 / Caddy 2.6.2, with both original process PIDs unchanged; public DNS and ACME issuance still need to be verified when a specific runtime starts.
 
 
-## ComfyUI 页面长时间空白
+## ComfyUI page stays blank for a long time
 
-先区分服务不可用与前端资源加载慢：经认证的 `/api/system_stats` 能返回，并不代表 JavaScript、工作流工具栏与 `/ws` 已加载成功。应检查浏览器 Network 中最慢的 `/assets/` 文件，再对比服务器本机 FRP 回源与公网下载耗时。
+First distinguish an unavailable service from slow frontend asset loading: an authenticated `/api/system_stats` responding does not mean the JavaScript, workflow toolbar and `/ws` have loaded. Check the slowest `/assets/` file in the browser's Network tab, then compare the FRP origin fetch on the server itself with the public download time.
 
-Caddy 2.10.2 及以上版本的 ComfyUI FRP 路由对 `/assets/` 下带八位内容哈希的 JS/CSS 设置浏览器私有长期缓存，仅限成功的 GET/HEAD 响应。首页、API、自定义扩展以及 401 响应不采用此缓存规则。升级前端后文件哈希变化，会自动下载新文件；首次访问仍取决于公网带宽。已有运行时需更新服务端站点配置后才生效。
+With Caddy 2.10.2 and later, the ComfyUI FRP route sets a long-lived private browser cache for JS/CSS under `/assets/` that carry an eight-character content hash, only for successful GET/HEAD responses. The index page, API, custom extensions and 401 responses do not use this cache rule. After a frontend upgrade the file hashes change and new files are downloaded automatically; the first visit still depends on public bandwidth. Existing runtimes need their server site configuration updated before this takes effect.
 
-部分旧版 Caddy/Go 组合在 reload 时可能出现 `context: internal error: missing cancel error` 并退出，systemd 停留在 reload 状态。共享后端会限制 reload 等待时间，且仅在 MainPID 已为 0 时 stop/start 恢复经过验证的配置；仍有主进程时不会自动强停。相同路由配置不会重复 reload。应保留配置、证书和服务单元，单独升级有问题的 Caddy 二进制。
+Some older Caddy/Go combinations may hit `context: internal error: missing cancel error` on reload and exit, leaving systemd stuck in the reloading state. The shared backend limits the reload wait and restores the verified configuration with stop/start only when MainPID is already 0; it never force-stops while a main process still exists. Identical route configurations are not reloaded again. Keep the configuration, certificates and service units, and upgrade the problematic Caddy binary separately.
 
-排障建议：若页面加载明显慢于预期，可使用校验过发布哈希的较新 Caddy 版本（通过 systemd drop-in 覆盖执行程序，保留原二进制、站点与证书），并优先核对访问端网络（代理/网关分流规则、实际出口、TCP 重传），不要仅凭单个 HTTPS 文件下载慢推断服务器总带宽不足。若本地代理将项目域名整体设为直连而直连链路质量差，可为具体服务域名（例如 `comfyui.example.com`）添加优先级更高的代理规则；修改代理配置前保留备份并运行其自带的配置校验命令。
+Troubleshooting tips: if pages load much slower than expected, use a newer Caddy version with verified release hashes (override the executable with a systemd drop-in, keeping the original binary, sites and certificates), and check the client network first (proxy/gateway routing rules, actual egress, TCP retransmissions); do not conclude that total server bandwidth is insufficient from one slow HTTPS file download. If a local proxy sends the whole project domain direct and the direct path is poor, add a higher-priority proxy rule for the specific service hostname (e.g. `comfyui.example.com`); back up the proxy configuration and run its own validation command before changing it.

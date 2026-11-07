@@ -1,10 +1,10 @@
-# Unlimited-OCR 2：PDF 与图片批量转 Markdown
+# Unlimited-OCR 2: batch PDF and image to Markdown
 
-默认 **A100**，Caddy Bearer/Basic Auth；模型在 Colab SSD，任务与转换结果持久保存在 Drive。
+Defaults to **A100** with Caddy Bearer/Basic Auth; the model lives on the Colab SSD, and jobs and conversion results are persisted on Drive.
 
-共享的安装前置、域名、认证、超时和停止行为见 [运行时通用操作](runtime-common.md)。以下命令均在本机执行。
+Shared prerequisites, domains, authentication, timeouts and stop behavior are in [Common runtime operations](runtime-common.md). All commands below run on the local machine.
 
-## 启动与最短转换
+## Startup and the shortest conversion
 
 ```bash
 colabllm unlimited-ocr up
@@ -13,10 +13,10 @@ colabllm unlimited-ocr ocr ./document.pdf -O ./ocr-results
 colabllm unlimited-ocr ocr --help
 ```
 
-`ocr` 的别名为 `convert/run`。本机文件按块上传到 Drive 再在 GPU 处理；`-O` 将结果下载回本机。
-服务就绪要求模型加载及真实推理预热，域名可访问不等于 OCR 可用。
+`ocr` has the aliases `convert/run`. Local files are uploaded to Drive in chunks and then processed on the GPU; `-O` downloads the results back to the local machine.
+Readiness requires model loading and a real inference warm-up; a reachable domain does not mean OCR is available.
 
-## 输入与输出目录
+## Input and output directories
 
 ```bash
 colabllm unlimited-ocr ocr ./documents --local -O ./ocr-results
@@ -25,15 +25,15 @@ colabllm unlimited-ocr ocr ./document.pdf 'drive://scans' -O ./ocr-results
 colabllm unlimited-ocr ls-drive 'scans'
 ```
 
-PDF、PNG、JPEG、WEBP、BMP、TIFF 可处理；目录默认递归，`--no-recursive` 限制为当前层。
-存在的本机路径自动按本机处理，`drive://`、`MyDrive/` 或远端完整 MyDrive 路径按 Drive 处理。
-其他相对路径可能按 Drive 解释；本机文件推荐写 `./` 或使用 `--local`。Drive 目录不是网页分享链接或文件 ID。
-`--output-dir` 是 **Drive** 根目录；`-O/--local-output-dir` 是 **本机** 根目录，可同时指定。
+PDF, PNG, JPEG, WEBP, BMP and TIFF can be processed; directories are recursive by default, and `--no-recursive` limits to the current level.
+Existing local paths are treated as local automatically; `drive://`, `MyDrive/` or a full remote MyDrive path are treated as Drive.
+Other relative paths may be interpreted as Drive; prefix local files with `./` or use `--local`. A Drive directory is not a web share link or a file ID.
+`--output-dir` is the **Drive** root; `-O/--local-output-dir` is the **local** root; both can be given.
 
-默认 Drive 输出为 `MyDrive/colab-llm/unlimited-ocr/outputs/`。本机上传副本在服务 Drive `uploads/` 中保留，
-需等任务不再依赖再清理。本机文件夹保留文件夹名/相对子目录；同批本机输出名称冲突会报错。
+The default Drive output is `MyDrive/colab-llm/unlimited-ocr/outputs/`. Uploaded copies of local files are kept in the service's Drive `uploads/`;
+clean them up only once no job depends on them. Local folders keep their folder name/relative subdirectories; output name conflicts among local files in one batch are errors.
 
-## 后台任务、查询与恢复
+## Background jobs, queries and recovery
 
 ```bash
 colabllm unlimited-ocr ocr 'drive://scans' --no-wait
@@ -42,12 +42,12 @@ colabllm unlimited-ocr job JOB_ID --wait --timeout 600 -O ./ocr-results
 colabllm unlimited-ocr resume JOB_ID --wait --timeout 600 -O ./ocr-results
 ```
 
-上传结束且返回任务 ID 后，客户端断开不取消服务端任务。默认 `ocr` 等待完成，`--no-wait` 只提交。
-`job --wait` 的 `--timeout 0` 默认不限时；`--poll-interval` 改查询频率。超时退出 124，任务仍在后台，继续查原 ID。
-`resume` 适用于失败/中断任务，已排队、运行或完成的任务不能重复恢复。
-服务重启会将持久记录里的 queued/running 任务重新排队，复用已完成页面组；不是从头盲目重跑。
+Once the upload has finished and a job ID was returned, a client disconnect does not cancel the server-side job. By default `ocr` waits for completion; `--no-wait` only submits.
+`job --wait` with `--timeout 0` waits without limit by default; `--poll-interval` changes the query interval. A timeout exits with 124 while the job keeps running in the background; keep querying the original ID.
+`resume` is for failed/interrupted jobs; queued, running or completed jobs cannot be resumed again.
+A service restart re-queues the queued/running jobs from the persistent records and reuses completed page groups; it never blindly reruns from scratch.
 
-## 参数与结果验收
+## Parameters and result acceptance
 
 ```bash
 colabllm unlimited-ocr ocr ./documents --local --dpi 200 --pages-per-chunk 10 \
@@ -55,16 +55,16 @@ colabllm unlimited-ocr ocr ./documents --local --dpi 200 --pages-per-chunk 10 \
 colabllm unlimited-ocr ocr ./document.pdf --overwrite -O ./ocr-results
 ```
 
-DPI 为 72–400，页面组 1–100，页 token 预算 32–20000。大页面组增加显存并保留组内跨页上下文，
-不是组越大越好；组间不保证自动合并段落/表格。默认每组 10 页，预算有组级上限，截断时调整参数并检查输出。
-高级模型推理参数以 `ocr --help` 为准；自定义 prompt 或布局参数可能改变结果结构，应在小样本验证后处理整批。
-未变更的已完成文件默认跳过；`--overwrite` 强制重新转换。
+DPI is 72-400, page groups 1-100 and the per-page token budget 32-20000. Large page groups use more VRAM and keep cross-page context within a group,
+but bigger is not always better; paragraphs/tables are not guaranteed to be merged across groups. The default is 10 pages per group and the budget has a per-group cap; when output is truncated, adjust parameters and check the output.
+`ocr --help` is authoritative for advanced inference parameters; custom prompts or layout parameters may change the result structure, so validate on a small sample before processing a whole batch.
+Completed, unchanged files are skipped by default; `--overwrite` forces reconversion.
 
-每份文件目录通常含 `result.md`、`result.raw.txt`、`chunk-*/` 裁剪图片和 `complete.json`。
-Markdown 的图片引用依赖子目录，交付时保留结构。任务可部分失败，检查每个文件状态和错误；failed/interrupted CLI 返回 1。
-任务记录保存在 `MyDrive/colab-llm/unlimited-ocr/jobs/`，输出路径以任务响应为准。
+Each file's directory usually contains `result.md`, `result.raw.txt`, cropped images under `chunk-*/` and `complete.json`.
+Image references in the Markdown depend on the subdirectories, so keep the structure when delivering. Jobs can partially fail; check each file's status and errors. The CLI returns 1 for failed/interrupted.
+Job records are kept in `MyDrive/colab-llm/unlimited-ocr/jobs/`; the output paths in the job response are authoritative.
 
-## 多实例与远端调用
+## Multiple instances and remote calls
 
 ```bash
 colabllm unlimited-ocr up -i 2
@@ -73,6 +73,6 @@ colabllm unlimited-ocr logs -i 2 -n 100
 colabllm unlimited-ocr down -i 2
 ```
 
-`UNLIMITED_OCR_URL` / `--url` 和 `UNLIMITED_OCR_API_TOKEN` / `--api-token` 可连接已有服务。
-API 包括 `POST /api/jobs`、`GET /api/jobs/ID`、`POST /api/jobs/ID/resume`、上传和结果接口；小请求按块传输大文件。
-多个实例可能共享任务与输出所在 Drive 目录，不要把它们当成互相隔离的数据账户。
+`UNLIMITED_OCR_URL` / `--url` and `UNLIMITED_OCR_API_TOKEN` / `--api-token` connect to an existing service.
+The API includes `POST /api/jobs`, `GET /api/jobs/ID`, `POST /api/jobs/ID/resume`, plus upload and result endpoints; large files are transferred in chunks with small requests.
+Several instances may share the Drive directory holding jobs and outputs; do not treat them as isolated data accounts.

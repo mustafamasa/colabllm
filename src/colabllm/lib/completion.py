@@ -9,7 +9,7 @@ from colabsvc import build_parser
 from paths import user_home
 
 ROOT = Path(__file__).resolve().parents[1]
-GLOBAL = ('services', 'help', 'doctor', 'completion', 'skill', 'tunnel-config', 'frp-config', 'frp-status')
+GLOBAL = ('services', 'help', 'doctor', 'completion', 'skill', 'ui', 'tunnel-config', 'frp-config', 'frp-status')
 FLAGS = ('--help', '--version', '--debug', '--quiet', '--no-color', '--command-timeout')
 
 
@@ -74,7 +74,7 @@ def candidates(words):
     if service == 'completion':
         return [shell for shell in ('bash', 'zsh', 'fish') if shell.startswith(prefix)]
     if service not in scripts:
-        parser = runpy.run_path(str(ROOT/'utility.py'))['build_parser']() if service in ('doctor', 'skill') else None
+        parser = runpy.run_path(str(ROOT/'utility.py'))['build_parser']() if service in ('doctor', 'skill', 'ui') else None
         if service in ('tunnel-config', 'frp-config', 'frp-status'):
             # Global controller parsers are also shared with completion.
             parser = runpy.run_path(str(ROOT/'control.py'))['build_parser']()
@@ -159,4 +159,4 @@ def shell_script(shell):
     try:
         return SCRIPTS[shell]
     except KeyError:
-        raise UsageError('支持的 Shell：bash、zsh、fish') from None
+        raise UsageError('Supported shells: bash, zsh, fish') from None

@@ -6,8 +6,8 @@
   colabllm longcat-avatar up -i 2 --domain --gpu G4
   colabllm longcat-avatar generate --audio speech.wav --image person.png --prompt "A person speaking."
   colabllm longcat-avatar job JOB_ID --wait -o result.mp4
-  colabllm longcat-avatar ls-drive "素材"
-  colabllm longcat-avatar generate --audio-drive "素材/speech.wav" --image-drive "素材/person.png" --prompt "A person speaking." --drive-output "成片"
+  colabllm longcat-avatar ls-drive "assets"
+  colabllm longcat-avatar generate --audio-drive "assets/speech.wav" --image-drive "assets/person.png" --prompt "A person speaking." --drive-output "renders"
 """
 import argparse
 import json
@@ -63,7 +63,7 @@ class AvatarClient:
     def upload(self, filename):
         path = Path(filename).expanduser().resolve()
         if not path.is_file():
-            raise ValueError(f"文件不存在：{path}")
+            raise ValueError(f"File not found: {path}")
         boundary = "avatar-" + uuid.uuid4().hex
         name = path.name.replace('"', "_").replace("\r", "_").replace("\n", "_")
         mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
@@ -81,7 +81,7 @@ class AvatarClient:
             }) as response:
                 uploaded = json.load(response)
         if not isinstance(uploaded, list) or not uploaded or not isinstance(uploaded[0], str):
-            raise RuntimeError("上传响应格式异常")
+            raise RuntimeError("Unexpected upload response format")
         return {"path": uploaded[0], "orig_name": path.name, "meta": {"_type": "gradio.FileData"}}
 
     def source(self, value):
@@ -98,7 +98,7 @@ class AvatarClient:
         with self.open("/jobs", json.dumps(data).encode(), {"Content-Type": "application/json"}) as response:
             result = json.load(response)
         if not isinstance(result.get("job_id"), str):
-            raise RuntimeError("提交响应中缺少任务编号")
+            raise RuntimeError("Submit response is missing the job ID")
         return result["job_id"]
 
     def list_drive(self, path):
@@ -112,7 +112,7 @@ class AvatarClient:
                     raise
                 if attempt == 2:
                     raise
-                print("网盘目录查询暂时失败，正在重试……", file=sys.stderr, flush=True)
+                print("Drive directory query failed temporarily; retrying...", file=sys.stderr, flush=True)
                 time.sleep(1)
 
     def job(self, job_id, timeout=30):
@@ -120,7 +120,7 @@ class AvatarClient:
             return json.load(response)
 
     def wait(self, job_id, interval=3, timeout=0):
-        deadline = Deadline(timeout, f"等待超时，服务端任务仍会继续：{job_id}")
+        deadline = Deadline(timeout, f"Timed out waiting; the server-side job keeps running: {job_id}")
         previous = None
         while True:
             try:
@@ -128,13 +128,13 @@ class AvatarClient:
             except (urllib.error.URLError, OSError) as error:
                 if isinstance(error, urllib.error.HTTPError) and error.code not in (429, 502, 503, 504, 530):
                     raise
-                message = "连接暂时中断，正在重连；服务端任务不受影响"
+                message = "Connection interrupted, reconnecting; the server-side job is not affected"
             else:
                 message = state.get("message", state["status"])
                 if state["status"] == "completed":
                     return state
                 if state["status"] in ("failed", "cancelled"):
-                    raise RuntimeError(f"任务{state['status']}：{message}")
+                    raise RuntimeError(f"Job {state['status']}: {message}")
             if message != previous:
                 print(message, file=sys.stderr, flush=True)
                 previous = message
@@ -142,7 +142,7 @@ class AvatarClient:
 
     def download(self, state, destination):
         if state["status"] != "completed":
-            raise ValueError("任务尚未完成；使用 --wait 等待完成后下载")
+            raise ValueError("Job not finished yet; use --wait to wait for completion before downloading")
         output = Path(destination).expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         path = "/jobs/" + urllib.parse.quote(state["id"], safe="") + "/video"
@@ -161,48 +161,48 @@ class AvatarClient:
 
 
 def custom_parser(parser=None, commands=None):
-    parser = parser or argparse.ArgumentParser(prog="colabllm longcat-avatar", description="Avatar 1.5：提交生成、查询后台任务、下载视频")
+    parser = parser or argparse.ArgumentParser(prog="colabllm longcat-avatar", description="Avatar 1.5: submit generations, query background jobs, download videos")
     commands = commands or parser.add_subparsers(dest="cmd", required=True)
-    generate = commands.add_parser("generate", help="提交生成任务；默认按完整音频时长生成")
+    generate = commands.add_parser("generate", help="submit a generation job; by default generates for the full audio length")
     audio = generate.add_mutually_exclusive_group(required=True)
-    audio.add_argument("--audio", help="本地音频或 drive:// 网盘路径")
-    audio.add_argument("--audio-drive", help="MyDrive 内音频路径，无需先下载到本机")
+    audio.add_argument("--audio", help="local audio file or drive:// path")
+    audio.add_argument("--audio-drive", help="audio path inside MyDrive, no local download needed")
     image = generate.add_mutually_exclusive_group()
-    image.add_argument("--image", help="本地参考图片或 drive:// 网盘路径；可省略")
-    image.add_argument("--image-drive", help="MyDrive 内参考图片路径")
-    generate.add_argument("--drive-output", "--output-drive", help="生成视频保存到 MyDrive 内的指定目录")
+    image.add_argument("--image", help="local reference image or drive:// path; optional")
+    image.add_argument("--image-drive", help="reference image path inside MyDrive")
+    generate.add_argument("--drive-output", "--output-drive", help="save the generated video to this directory inside MyDrive")
     prompt = generate.add_mutually_exclusive_group(required=True)
-    prompt.add_argument("--prompt", help="人物、场景和动作描述")
-    prompt.add_argument("--prompt-file", help="从 UTF-8 文本文件读取描述")
+    prompt.add_argument("--prompt", help="description of the person, scene and actions")
+    prompt.add_argument("--prompt-file", help="read the description from a UTF-8 text file")
     generate.add_argument("--resolution", choices=("480p", "720p"), default="480p")
     generate.add_argument("--seed", type=int, default=42)
     generate.add_argument("--sampling-mode", choices=("distilled", "standard"), default="distilled",
-                          help="distilled：8 步快速模式；standard：关闭 DMD LoRA，允许调节 CFG")
-    generate.add_argument("--steps", type=int, help="推理步数；快速模式固定 8，标准模式默认 50")
-    generate.add_argument("--text-cfg", type=float, help="文本 CFG；标准模式默认 4.0")
-    generate.add_argument("--audio-cfg", type=float, help="音频 CFG；标准模式默认 3.0，并非嘴部幅度参数")
-    generate.add_argument("--frames", type=int, help="手动模式每段帧数（17–161 的 4n+1）")
-    generate.add_argument("--segments", type=int, help="手动生成段数（1–20）；省略则覆盖完整音频")
-    job = commands.add_parser("job", help="查询任务；--wait 持续等待")
+                          help="distilled: fast 8-step mode; standard: DMD LoRA off, CFG adjustable")
+    generate.add_argument("--steps", type=int, help="inference steps; fixed at 8 in fast mode, default 50 in standard mode")
+    generate.add_argument("--text-cfg", type=float, help="text CFG; default 4.0 in standard mode")
+    generate.add_argument("--audio-cfg", type=float, help="audio CFG; default 3.0 in standard mode, not a mouth-amplitude parameter")
+    generate.add_argument("--frames", type=int, help="frames per segment in manual mode (4n+1 between 17 and 161)")
+    generate.add_argument("--segments", type=int, help="number of segments in manual mode (1-20); omit to cover the full audio")
+    job = commands.add_parser("job", help="query a job; --wait keeps waiting")
     job.add_argument("job_id")
-    download = commands.add_parser("download", help="下载已完成任务的视频")
+    download = commands.add_parser("download", help="download the video of a finished job")
     download.add_argument("job_id")
-    listing = commands.add_parser("ls-drive", help="列出 Google Drive 目录")
+    listing = commands.add_parser("ls-drive", help="list a Google Drive directory")
     listing.add_argument("path", nargs="?", default="drive://")
     for command in (generate, job, download):
-        command.add_argument("--wait", action="store_true", help="等待完成；Ctrl+C 只停止等待")
-        command.add_argument("-o", "--output", help="下载到本地文件；generate/job 会自动等待完成")
-        command.add_argument("--poll", type=positive_seconds, default=3, help="查询间隔秒数，默认 3")
-        command.add_argument("--timeout", type=nonnegative_seconds, default=0, help="最长等待秒数；0 为不限")
+        command.add_argument("--wait", action="store_true", help="wait for completion; Ctrl+C only stops waiting")
+        command.add_argument("-o", "--output", help="download to a local file; generate/job wait for completion automatically")
+        command.add_argument("--poll", type=positive_seconds, default=3, help="polling interval in seconds, default 3")
+        command.add_argument("--timeout", type=nonnegative_seconds, default=0, help="maximum wait in seconds; 0 means unlimited")
     for command in (generate, job, download, listing):
-        command.add_argument("--url", help="覆盖服务地址；也可设置 LONGCAT_AVATAR_URL")
-        command.add_argument("--api-token", "--token", dest="token", help="API Token；也可设置 LONGCAT_AVATAR_API_TOKEN 或 LONGCAT_AVATAR_TOKEN")
+        command.add_argument("--url", help="override the service URL; LONGCAT_AVATAR_URL also works")
+        command.add_argument("--api-token", "--token", dest="token", help="API token; LONGCAT_AVATAR_API_TOKEN or LONGCAT_AVATAR_TOKEN also work")
     return parser
 
 
 def run_custom(args):
     if getattr(args, "poll", 3) <= 0 or getattr(args, "timeout", 0) < 0:
-        raise ValueError("--poll 须大于 0，--timeout 不能为负数")
+        raise ValueError("--poll must be greater than 0 and --timeout cannot be negative")
     explicit_token = args.token or os.environ.get('LONGCAT_AVATAR_API_TOKEN') or os.environ.get('LONGCAT_AVATAR_TOKEN')
     url, token = resolve_endpoint(State(SERVICE).load(), args.url, explicit_token,
                                   url_env='LONGCAT_AVATAR_URL')
@@ -211,26 +211,26 @@ def run_custom(args):
         print(json.dumps(client.list_drive(args.path), ensure_ascii=False, indent=2))
         return
     if args.output and is_drive_path(args.output):
-        raise ValueError("-o 用于本地下载；生成时请用 --drive-output 指定网盘目录")
+        raise ValueError("-o is for local downloads; use --drive-output to choose a Drive directory when generating")
     if args.cmd == "generate":
         args.audio = drive_spec(args.audio_drive) if args.audio_drive else args.audio
         args.image = drive_spec(args.image_drive) if args.image_drive else args.image
         prompt = Path(args.prompt_file).expanduser().read_text(encoding="utf-8") if args.prompt_file else args.prompt
         if not prompt.strip():
-            raise ValueError("描述不能为空")
+            raise ValueError("The description cannot be empty")
         for filename in (args.audio, args.image):
             if filename and not is_drive_path(filename) and not Path(filename).expanduser().is_file():
-                raise ValueError(f"文件不存在：{filename}")
+                raise ValueError(f"File not found: {filename}")
         frames, segments = args.frames if args.frames is not None else 93, args.segments if args.segments is not None else 1
         if not (17 <= frames <= 161 and frames % 4 == 1 and 1 <= segments <= 20):
-            raise ValueError("手动帧数须为 17–161 的 4n+1，段数须为 1–20")
+            raise ValueError("Manual frame count must be 4n+1 between 17 and 161, and segments must be 1-20")
         sampling = sampling_settings(args.sampling_mode, args.steps, args.text_cfg, args.audio_cfg)
         job_id = client.submit(args.audio, args.image, prompt, args.resolution, frames, segments,
                                args.seed, args.frames is None and args.segments is None, args.drive_output, sampling)
         if not args.wait and not args.output:
             print(json.dumps({"job_id": job_id}, ensure_ascii=False))
             return
-        print(f"已提交任务：{job_id}", file=sys.stderr, flush=True)
+        print(f"Job submitted: {job_id}", file=sys.stderr, flush=True)
     else:
         job_id = args.job_id
     should_wait = args.wait or (args.output and args.cmd != "download") or args.cmd == "generate"

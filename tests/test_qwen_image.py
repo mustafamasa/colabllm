@@ -203,7 +203,7 @@ class QwenImageNotebookAndMiddlewareTest(unittest.TestCase):
                         "/v1/images/edits",
                         json.dumps({
                             "model": "gpt-image-2",
-                            "prompt": "让图1 <image1> 摆出图2 <image2> 的动作",
+                            "prompt": "Make the person in image 1 <image1> strike the pose from image 2 <image2>",
                             "images": ["person.png", "drive://inputs/pose.png"],
                             "size": "auto",
                             "lora": "drive://loras/anime.safetensors",
@@ -384,8 +384,8 @@ class QwenImageCliTest(unittest.TestCase):
 
             # 1. T2I with negative_prompt automatically switches true_cfg_scale to 4.0
             args_gen = self._parse([
-                "generate", "青瓷茶壶",
-                "--negative-prompt", "模糊",
+                "generate", "çini çaydanlık",
+                "--negative-prompt", "bulanık",
                 "--save-drive", "outputs/teapot.png",
                 "--url", self.base_url, "--api-token", "test-secret",
             ])
@@ -398,7 +398,7 @@ class QwenImageCliTest(unittest.TestCase):
 
             # 2. Multi-ref RGBA edit preserving exact <image1>, <image2> order + Drive & local output
             args_edit = self._parse([
-                "edit", "让图1 <image1> 穿上图2 <image2> 的衣服，透明背景",
+                "edit", "Image 1 <image1> wears the clothes from image 2 <image2>, transparent background",
                 "--drive-image", "inputs/person.jpg",
                 "--image", str(local_ref),
                 "--rgba",

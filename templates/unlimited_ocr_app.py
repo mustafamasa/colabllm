@@ -24,7 +24,7 @@ MODEL_REVISION = '0480966938291445591f69f08a13b041c073a96a'
 
 def drive_path(spec: str) -> Path:
     if not isinstance(spec, str) or not spec.strip():
-        raise ValueError('Drive 路径不能为空')
+        raise ValueError('The Drive path cannot be empty')
     spec = spec.removeprefix('drive://')
     if spec == 'MyDrive':
         spec = '.'
@@ -33,7 +33,7 @@ def drive_path(spec: str) -> Path:
     path = Path(spec)
     path = (path if path.is_absolute() else DRIVE / path).resolve()
     if not path.is_relative_to(DRIVE):
-        raise ValueError('路径必须位于 /content/drive/MyDrive 内')
+        raise ValueError('The path must be inside /content/drive/MyDrive')
     return path
 
 
@@ -49,12 +49,12 @@ def atomic_json(path: Path, value):
 
 def discover(specs, recursive=True, output=None):
     if not isinstance(specs, list) or not specs:
-        raise ValueError('至少指定一个 Drive 文件或文件夹')
+        raise ValueError('Specify at least one Drive file or folder')
     found = set()
     for spec in specs:
         root = drive_path(spec)
         if not root.exists():
-            raise ValueError(f'输入不存在: {spec}')
+            raise ValueError(f'Input does not exist: {spec}')
         candidates = (root.rglob('*') if recursive else root.iterdir()) if root.is_dir() else [root]
         for candidate in candidates:
             path = candidate.resolve()
@@ -65,7 +65,7 @@ def discover(specs, recursive=True, output=None):
             if path.is_file() and path.suffix.lower() in EXTENSIONS:
                 found.add(path)
     if not found:
-        raise ValueError('未找到 PDF 或受支持的图片')
+        raise ValueError('No PDF or supported image found')
     return sorted(found)
 
 
@@ -231,7 +231,7 @@ class Engine:
                         path.unlink()
                     progress(min(start + len(pages), page_count), page_count)
                 if not page_count:
-                    raise ValueError('文档没有页面')
+                    raise ValueError('The document has no pages')
             finally:
                 if pdf is not None:
                     pdf.close()
@@ -269,7 +269,7 @@ class Jobs:
         # Validate persisted settings before putting them back on the GPU queue.
         record['options'] = options(record['options'])
         if not record.get('files') or not re.fullmatch(r'[0-9a-f]{32}', record['id']):
-            raise ValueError('非法任务记录')
+            raise ValueError('Invalid job record')
         record.update(status='queued', resume_count=record.get('resume_count', 0) + 1,
                       resumed_at=time.time(), automatic_resume=automatic)
         record.pop('error', None)
@@ -282,12 +282,12 @@ class Jobs:
     def resume(self, job_id):
         # One lock covers validation and persisted transition, so duplicate resume cannot enqueue twice.
         if not re.fullmatch(r'[0-9a-f]{32}', job_id):
-            raise ValueError('非法 job ID')
+            raise ValueError('Invalid job ID')
         with self.lock:
             path = self.root / (job_id + '.json')
             record = json.loads(path.read_text())
             if record['status'] in ('queued', 'running', 'completed'):
-                raise ValueError('任务已在队列中、运行中或已完成')
+                raise ValueError('The job is already queued, running or completed')
             self.prepare_resume(record)
             atomic_json(path, record)
             self.queue.put(record)
@@ -295,7 +295,7 @@ class Jobs:
 
     def get(self, job_id):
         if not re.fullmatch(r'[0-9a-f]{32}', job_id):
-            raise ValueError('非法 job ID')
+            raise ValueError('Invalid job ID')
         with self.lock:
             return json.loads((self.root / (job_id + '.json')).read_text())
 
@@ -308,7 +308,7 @@ class Jobs:
         output = drive_path(body.get('output_dir') or str(DATA / 'outputs'))
         paths = discover(body.get('inputs'), body.get('recursive', True), output)
         if any(output == path or output.is_relative_to(path) for path in paths):
-            raise ValueError('输出目录不能位于输入文件内部')
+            raise ValueError('The output directory cannot be inside an input file')
         job = dict(id=uuid.uuid4().hex, status='queued', created=time.time(), options=opts,
                    output_dir=str(output), overwrite=bool(body.get('overwrite', False)),
                    files=[dict(source=str(p), status='queued',
@@ -316,9 +316,9 @@ class Jobs:
         for item in job['files']:
             relative = Path(item['relative_output'])
             if relative.is_absolute() or '..' in relative.parts or not relative.parts:
-                raise ValueError('非法输出相对路径')
+                raise ValueError('Invalid relative output path')
         if len({item['relative_output'] for item in job['files']}) != len(paths):
-            raise ValueError('多个源文件的输出相对路径发生冲突')
+            raise ValueError('Relative output paths of several source files conflict')
         self.save(job)
         self.queue.put(job)
         return job
@@ -361,7 +361,7 @@ class Jobs:
                                    '_checkpoint_generation': job['id'] if job['overwrite'] else 'shared'}
                 result = self.engine.convert(source, destination, conversion_opts, progress)
                 if file_signature(source, job['options']) != signature:
-                    raise ValueError('转换期间源文件发生变化；请恢复任务以重新处理')
+                    raise ValueError('A source file changed during conversion; resume the job to reprocess it')
                 atomic_json(marker, dict(signature=signature, source=str(source), options=job['options'], **result))
                 item.update(status='completed', output=str(destination), completed_signature=signature, **result)
             except Exception as error:
@@ -377,11 +377,11 @@ def upload_chunk(body):
     digest = body.get('sha256', '')
     name = body.get('name', '')
     if not re.fullmatch(r'[0-9a-f]{64}', digest) or Path(name).name != name or Path(name).suffix.lower() not in EXTENSIONS:
-        raise ValueError('非法上传名称或 SHA256')
+        raise ValueError('Invalid upload name or SHA256')
     offset = int(body.get('offset', 0))
     chunk = base64.b64decode(body.get('data', ''), validate=True)
     if offset < 0 or len(chunk) > 512 * 1024:
-        raise ValueError('非法分块大小/偏移')
+        raise ValueError('Invalid chunk size/offset')
     folder = drive_path(str(DATA / 'uploads' / digest))
     folder.mkdir(parents=True, exist_ok=True)
     destination = folder / name
@@ -392,7 +392,7 @@ def upload_chunk(body):
         temporary.write_bytes(chunk)
     else:
         if not temporary.exists() or temporary.stat().st_size != offset:
-            raise ValueError('上传偏移不匹配，请重试上传')
+            raise ValueError('Upload offset mismatch; retry the upload')
         with temporary.open('ab') as stream:
             stream.write(chunk)
     if body.get('final'):
@@ -402,7 +402,7 @@ def upload_chunk(body):
                 hasher.update(block)
         if hasher.hexdigest() != digest:
             temporary.unlink()
-            raise ValueError('上传 SHA256 校验失败')
+            raise ValueError('Upload SHA256 verification failed')
         os.replace(temporary, destination)
     return dict(path=str(destination), complete=destination.exists())
 
@@ -411,7 +411,7 @@ def result_files(jobs, job_id, index, name=None, offset=0):
     record = jobs.get(job_id)
     item = record['files'][index]
     if item['status'] not in ('completed', 'skipped'):
-        raise ValueError('文件尚未完成转换')
+        raise ValueError('The file has not finished converting')
     root = drive_path(item['output'])
     if name is None:
         return dict(files=[str(p.relative_to(root)) for p in sorted(root.rglob('*'))
@@ -419,7 +419,7 @@ def result_files(jobs, job_id, index, name=None, offset=0):
                            and p.resolve().is_relative_to(root)])
     target = (root / name).resolve()
     if not target.is_relative_to(root) or not target.is_file() or offset < 0:
-        raise ValueError('非法结果文件路径/偏移')
+        raise ValueError('Invalid result file path/offset')
     with target.open('rb') as stream:
         stream.seek(offset)
         chunk = stream.read(512 * 1024)
@@ -456,7 +456,7 @@ def serve():
             try:
                 size = int(self.headers.get('Content-Length', '0'))
                 if not 0 < size <= 1024 * 1024:
-                    raise ValueError('无效请求长度')
+                    raise ValueError('Invalid request length')
                 body = json.loads(self.rfile.read(size))
                 if not isinstance(body, dict):
                     raise ValueError('JSON body must be an object')

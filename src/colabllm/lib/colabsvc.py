@@ -50,7 +50,7 @@ from pathlib import Path
 from paths import private_dir, user_home
 from cli_support import CliError, UsageError, command_timeout, positive_seconds, diagnostic, safe_urlopen
 from protocol import NotebookProtocol
-from processes import process_identity, runner_alive, stop_owned_process
+from processes import owned_process, process_identity, runner_alive, stop_owned_process
 
 STATE_ROOT = user_home()
 DEFAULT_ZONE = "example.com"
@@ -101,7 +101,7 @@ def extract_instance_arg(argv: list[str] | None = None) -> tuple[str | None, lis
             break
         if a in ("-i", "--instance"):
             if i + 1 >= len(args) or args[i + 1].startswith("-"):
-                raise UsageError(f"{a} 需要有效的实例 ID")
+                raise UsageError(f"{a} requires a valid instance ID")
             inst = validate_instance(args[i + 1])
             i += 2
         elif a.startswith("--instance="):
@@ -118,7 +118,7 @@ def extract_instance_arg(argv: list[str] | None = None) -> tuple[str | None, lis
 
 def validate_instance(value):
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_-]{0,63}", value):
-        raise UsageError("实例 ID 须为 1–64 位字母、数字、下划线或连字符，且不能以连字符开头")
+        raise UsageError("The instance ID must be 1-64 letters, digits, underscores or hyphens and must not start with a hyphen")
     return value
 
 
@@ -153,17 +153,17 @@ def validate_domain(value: str) -> str:
     try:
         host = value.strip().rstrip('.').encode('idna').decode('ascii').lower()
     except (UnicodeError, AttributeError):
-        raise ValueError('域名格式无效，请填写 example.com，不包含协议、端口或路径') from None
+        raise ValueError('Invalid domain; use a form like example.com, without scheme, port or path') from None
     labels = host.split('.')
     if len(host) > 253 or len(labels) < 2 or any(
         not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in labels
     ):
-        raise ValueError('域名格式无效，请填写 example.com，不包含协议、端口或路径')
+        raise ValueError('Invalid domain; use a form like example.com, without scheme, port or path')
     try:
         ipaddress.ip_address(host)
     except ValueError:
         return host
-    raise ValueError('请填写 DNS 域名，不能使用 IP 地址')
+    raise ValueError('Enter a DNS domain name; IP addresses are not allowed')
 
 
 def load_tunnel_config() -> dict:
@@ -173,9 +173,9 @@ def load_tunnel_config() -> dict:
     try:
         data = json.loads(path.read_text())
     except (ValueError, UnicodeError) as error:
-        raise RuntimeError(f"配置文件损坏：{path}；请修复该 JSON 文件或从备份恢复") from error
+        raise RuntimeError(f"Corrupted configuration file: {path}; fix the JSON file or restore it from a backup") from error
     if not isinstance(data, dict):
-        raise ValueError('tunnel-config.json 必须是 JSON 对象')
+        raise ValueError('tunnel-config.json must be a JSON object')
     if data.get('base_domain'):
         data['base_domain']=validate_domain(data['base_domain'])
     if data.get('frp') is not None:
@@ -322,7 +322,7 @@ def run(cmd: list[str], *, capture: bool = False, check: bool = True, input: str
     if check and res.returncode != 0:
         if capture:
             sys.stderr.write((res.stdout or "") + (res.stderr or ""))
-        raise CliError(f"命令执行失败 ({res.returncode}): {' '.join(cmd[:4])}", res.returncode if res.returncode > 0 else 1)
+        raise CliError(f"Command failed ({res.returncode}): {' '.join(cmd[:4])}", res.returncode if res.returncode > 0 else 1)
     return res
 
 
@@ -347,7 +347,7 @@ class State:
                 raise ValueError("expected an object")
             return data
         except (ValueError, UnicodeError) as error:
-            raise RuntimeError(f"状态文件损坏：{self.path}；请修复该 JSON 文件或从备份恢复") from error
+            raise RuntimeError(f"Corrupted state file: {self.path}; fix the JSON file or restore it from a backup") from error
 
     @contextlib.contextmanager
     def lock(self, name="state", blocking=True):
@@ -359,7 +359,7 @@ class State:
             try:
                 fcntl.flock(lockfile, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
             except BlockingIOError:
-                raise RuntimeError(f"{self.dir.name} 正在执行其他生命周期操作，请稍后重试") from None
+                raise RuntimeError(f"{self.dir.name} is running another lifecycle operation; try again later") from None
             try:
                 yield
             finally:
@@ -597,7 +597,7 @@ def exec_runner(svc: Service, nb_path: Path) -> int:
         while True:
             remaining = max(0, deadline - time.monotonic()) if deadline is not None and not st.get('ready') else None
             if remaining == 0:
-                raise TimeoutError('等待 CT_READY 超时，前台连接已停止；可用 status 检查远端会话')
+                raise TimeoutError('Timed out waiting for CT_READY; the foreground connection was stopped. Use status to check the remote session')
             if not selector.select(remaining):
                 continue
             chunk = os.read(proc.stdout.fileno(), 65536)
@@ -613,7 +613,7 @@ def exec_runner(svc: Service, nb_path: Path) -> int:
             st = state.save(**update)
         rc = proc.wait()
         if rc == 0 and not st.get("ready"):
-            warn("Colab 在 CT_READY 之前退出，请查看日志中的启动错误")
+            warn("Colab exited before CT_READY; check the log for startup errors")
             rc = 1
         return rc if rc >= 0 else 128 - rc
     finally:
@@ -769,7 +769,7 @@ def _start_up(svc: Service, script: Path, a):
         base_service=svc.base_name or svc.name,
         env=env, url=None, ready=False, last_cell_started=False, login_user=None, login_pass=None,
         runner_exit=None, ready_timeout=getattr(a, "ready_timeout", None) or svc.ready_timeout,
-        started=time.strftime("%Y-%m-%d %H:%M:%S"),
+        started=time.strftime("%Y-%m-%d %H:%M:%S"), gpu=svc.tpu or svc.gpu or "none",
     )
 
     # 4. notebook through an attached `colab exec` (keep-alive)
@@ -784,7 +784,7 @@ def _start_up(svc: Service, script: Path, a):
                                 stderr=subprocess.STDOUT, start_new_session=True)
     identity = process_identity(proc.pid)
     if not identity:
-        raise RuntimeError(f"后台进程在登记前退出；请查看 {state.log_path}")
+        raise RuntimeError(f"The background process exited before it was registered; see {state.log_path}")
     state.save(runner_pid=proc.pid, runner_identity=identity, runner_mode="background")
     return proc
 
@@ -821,7 +821,7 @@ def _wait_ready(svc, proc, timeout=None):
                 die(f"runner exited early (code {proc.returncode}); see {state.log_path}")
             time.sleep(min(1, max(0, deadline - time.monotonic())))
         else:
-            raise TimeoutError("等待 CT_READY 超时；后台进程继续运行，请使用 status 或 logs -f 检查")
+            raise TimeoutError("Timed out waiting for CT_READY; the background process keeps running. Check with status or logs -f")
     except KeyboardInterrupt:
         raise
     show_info(svc, do_probe=True, reveal=False)
@@ -912,7 +912,7 @@ def cmd_down(svc: Service, a) -> None:
         if errors:
             summary = "; ".join(f"{name}: {err}" for name, err in errors)
             code = errors[0][1].code if isinstance(errors[0][1], CliError) else 1
-            raise CliError(f"部分实例停止失败：{summary}", code)
+            raise CliError(f"Some instances failed to stop: {summary}", code)
         return
     state = State(svc)
     with state.lock("operation", blocking=False):
@@ -920,7 +920,7 @@ def cmd_down(svc: Service, a) -> None:
         log(f"colab stop -s {svc.name}")
         result = run(["colab", "stop", "-s", svc.name], check=False)
         if result.returncode != 0:
-            raise CliError(f"停止 {svc.name} 失败；已保留运行状态，可重试 down", result.returncode if result.returncode > 0 else 1)
+            raise CliError(f"Failed to stop {svc.name}; the runtime state was kept, so down can be retried", result.returncode if result.returncode > 0 else 1)
         stop_owned_process(st.get("exec_pid"), st.get("exec_identity"), group=True)
         stop_owned_process(st.get("runner_pid"), st.get("runner_identity"), group=st.get("runner_mode") == "background")
         if a.delete_tunnel and st.get('frp_route'):
@@ -942,6 +942,38 @@ def cmd_down(svc: Service, a) -> None:
         state.update(lambda current: {k: st[k] for k in keys if k in st})
 
 
+def _owns_tunnel(st: dict) -> bool:
+    return bool(st.get("tunnel_id") or st.get("cloudflare_route") or st.get("frp_route"))
+
+
+def cmd_purge(svc: Service, a) -> None:
+    """Delete a stopped instance's local state; never leaves an untracked Colab session or tunnel behind silently."""
+    state = State(svc)
+    if not state.dir.is_dir():
+        raise CliError(f"No local state for '{svc.name}'")
+    with state.lock("operation", blocking=False):
+        st = state.load()
+        if runner_alive(st) or owned_process(st.get("exec_pid"), st.get("exec_identity")):
+            raise CliError(f"'{svc.name}' is still running; stop it with `down` first")
+        if _owns_tunnel(st) and not (a.delete_tunnel or a.keep_tunnel):
+            raise UsageError(f"'{svc.name}' owns the named tunnel {st.get('hostname') or ''}".rstrip()
+                             + "; pass --delete-tunnel to remove it or --keep-tunnel to leave it in place")
+        # `colab stop` succeeds for unknown sessions, so a non-zero exit means we could not confirm the VM is released.
+        log(f"colab stop -s {svc.name}")
+        result = run(["colab", "stop", "-s", svc.name], check=False)
+        if result.returncode != 0:
+            raise CliError(f"Could not confirm that the Colab session '{svc.name}' is stopped; local state was kept so purge can be retried",
+                           result.returncode if result.returncode > 0 else 1)
+        if a.delete_tunnel and st.get("frp_route"):
+            from frp_backend import remove_route
+            remove_route(st["frp_route"], svc.name)
+        if a.delete_tunnel and (st.get("tunnel_id") or st.get("cloudflare_route")):
+            delete_named_tunnel(st.get("cloudflare_route") or st)
+        # Removed while the operation lock is held so no concurrent `up` can recreate state in between.
+        shutil.rmtree(state.dir)
+    log(f"deleted local state for {svc.name}")
+
+
 def build_parser(svc: Service, configure=None):
     p = argparse.ArgumentParser(prog=f"colabllm {svc.base_name}", description=(sys.modules["__main__"].__doc__ or "").strip(),
                                 formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
@@ -951,11 +983,11 @@ def build_parser(svc: Service, configure=None):
     u = sub.add_parser("up", help="session -> Drive -> (cf tunnel) -> run notebook, keep it alive")
     tunnel = u.add_mutually_exclusive_group()
     tunnel.add_argument("--domain", nargs="?", const=True, metavar="HOST", type=validate_domain,
-                        help="完整固定域名；省略 HOST 时使用已配置的主域名，未配置则使用动态 URL")
+                        help="full fixed hostname; without HOST the configured base domain is used, or a dynamic URL if none is configured")
     tunnel.add_argument("--base-domain", metavar="DOMAIN", type=validate_domain,
-                        help="本次启动的主域名，如 example.com，自动生成 <service>.example.com")
-    tunnel.add_argument("--quick-tunnel", action="store_true", help="忽略主域名配置，强制使用动态 trycloudflare.com URL")
-    u.add_argument('--transport',choices=('cloudflare','frp'),help='本次启动覆盖全局隧道后端')
+                        help="base domain for this start, e.g. example.com; <service>.example.com is generated automatically")
+    tunnel.add_argument("--quick-tunnel", action="store_true", help="ignore the base domain configuration and force a dynamic trycloudflare.com URL")
+    u.add_argument('--transport',choices=('cloudflare','frp'),help='override the global tunnel backend for this start')
     u.add_argument("--gpu", help="override GPU (T4|L4|G4|H100|A100|none)")
     u.add_argument("--skip", default="", help="1-based code cells to skip, e.g. 1,2")
     u.add_argument("--no-drive", action="store_true", help="do not mount Google Drive")
@@ -970,6 +1002,10 @@ def build_parser(svc: Service, configure=None):
     d = sub.add_parser("down", help="stop runner + Colab session")
     d.add_argument("--delete-tunnel", action="store_true", help="also delete the named tunnel and its DNS record")
     d.add_argument("--all", action="store_true", help="stop all instances of this service")
+    purge = sub.add_parser("purge", help="delete a stopped instance's local state (credentials, logs, notebook copy); Drive data is kept")
+    purge_tunnel = purge.add_mutually_exclusive_group()
+    purge_tunnel.add_argument("--delete-tunnel", action="store_true", help="also delete the named tunnel / FRP route owned by the instance")
+    purge_tunnel.add_argument("--keep-tunnel", action="store_true", help="leave the named tunnel / FRP route in place")
     for name, help_text in (("info", "URL and state"), ("ps", "list instances"), ("list", "alias for ps"), ("status", "Colab status and authenticated health probe")):
         output = sub.add_parser(name, help=help_text)
         output.add_argument("--json", action="store_true", help="output machine-readable JSON")
@@ -977,10 +1013,10 @@ def build_parser(svc: Service, configure=None):
     lg = sub.add_parser("logs", help="notebook output")
     lg.add_argument("-f", "--follow", action="store_true")
     lg.add_argument("-n", "--lines", type=int, default=80)
-    tc = sub.add_parser("tunnel-config", help="查看或设置所有服务共享的 Cloudflare 主域名；未设置时使用动态 URL")
+    tc = sub.add_parser("tunnel-config", help="show or set the Cloudflare base domain shared by all services; dynamic URLs are used when unset")
     settings = tc.add_mutually_exclusive_group()
     settings.add_argument("--base-domain", metavar="DOMAIN", type=validate_domain)
-    settings.add_argument("--clear", action="store_true", help="移除持久主域名配置，恢复动态 URL 默认值")
+    settings.add_argument("--clear", action="store_true", help="remove the persistent base domain and go back to the dynamic URL default")
     p.add_argument("--command-timeout", type=positive_seconds, help="external command timeout in seconds (default: 300, or COLABLLM_COMMAND_TIMEOUT)")
     p.add_argument("--debug", action="store_true", help="show exception tracebacks")
     p.add_argument("--quiet", action="store_true", help="suppress diagnostic progress")
@@ -1024,6 +1060,8 @@ def main(svc: Service, *, configure=None, handlers=None, prepare_up=None) -> Non
         sys.exit(exec_runner(svc, Path(a.nb)))
     elif a.cmd == "down":
         cmd_down(svc, a)
+    elif a.cmd == "purge":
+        cmd_purge(svc, a)
     elif a.cmd == "info":
         show_info(svc, reveal=a.show_secrets, output_json=a.json)
     elif a.cmd in ("ps", "list"):
@@ -1031,7 +1069,7 @@ def main(svc: Service, *, configure=None, handlers=None, prepare_up=None) -> Non
     elif a.cmd == "status":
         result = run(["colab", "status", "-s", svc.name], capture=True, check=False)
         if result.returncode != 0:
-            raise CliError((result.stderr or "Colab 状态查询失败").strip(), result.returncode if result.returncode > 0 else 1)
+            raise CliError((result.stderr or "Colab status query failed").strip(), result.returncode if result.returncode > 0 else 1)
         if not show_info(svc, do_probe=True, reveal=a.show_secrets, output_json=a.json):
             raise SystemExit(1)
     elif a.cmd == "logs":

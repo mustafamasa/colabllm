@@ -21,6 +21,8 @@ def _inspect_wheel(wheel: Path) -> list[str]:
         assert services, 'Wheel contains no services'
         assert services == notebooks, f'Service script/notebook mismatch: {services} != {notebooks}'
         assert 'colabllm/lib/frp_server.py' in names, 'Missing SSH provisioning source'
+        for asset in ('index.html', 'app.css', 'app.js', 'favicon.svg'):
+            assert f'colabllm/webui/{asset}' in names, f'Missing web UI asset {asset}'
         assert any(n.endswith('/licenses/LICENSE') or n.endswith('/LICENSE') for n in names), 'Missing LICENSE in wheel'
         meta_files = [n for n in names if n.endswith('.dist-info/METADATA')]
         assert meta_files, 'Missing METADATA in wheel'
@@ -43,6 +45,7 @@ def _inspect_sdist(sdist: Path) -> list[str]:
         assert services, 'Source distribution contains no services'
         assert services == notebooks, f'Service script/notebook mismatch in sdist: {services} != {notebooks}'
         assert any(n.endswith('/src/colabllm/lib/frp_server.py') for n in names), 'Missing SSH provisioning source in sdist'
+        assert any(n.endswith('/src/colabllm/webui/app.js') for n in names), 'Missing web UI assets in sdist'
         assert any(n.endswith('/LICENSE') for n in names), 'Missing LICENSE in sdist'
         pkg_infos = [n for n in names if n.endswith('/PKG-INFO')]
         assert pkg_infos, 'Missing PKG-INFO in sdist'

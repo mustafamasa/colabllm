@@ -31,9 +31,9 @@ Usage:
   colabllm qwen-image up --gpu A100 --quantization fp8-all  # A100 (40 GB+) online FP8 (~28 GB VRAM)
   colabllm qwen-image ls-drive                              # List images on Google Drive
   colabllm qwen-image generate "A ceramic teapot on a wooden table" --save-drive outputs/teapot.png
-  colabllm qwen-image edit "让图1 <image1> 的人物摆出图2 <image2> 的动作并穿上图3 <image3> 的服装" \\
+  colabllm qwen-image edit "Make the person in image 1 <image1> strike the pose from image 2 <image2> and wear the outfit from image 3 <image3>" \\
       --drive-image inputs/person.jpg inputs/pose.jpg inputs/outfit.jpg --save-drive outputs/swap.png -o swap.png
-  colabllm qwen-image edit "提取人物身穿的完整服装，透明背景平铺展示" -r outfit.jpg --rgba -o garment_rgba.png
+  colabllm qwen-image edit "Extract the complete outfit the person is wearing, laid flat on a transparent background" -r outfit.jpg --rgba -o garment_rgba.png
   colabllm qwen-image down
 """
 from __future__ import annotations

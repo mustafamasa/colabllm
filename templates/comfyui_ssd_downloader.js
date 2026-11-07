@@ -3,18 +3,18 @@
   window.__ctSsdDownloaderLoaded = true;
 
   const MODEL_DIRS = [
-    ["diffusion_models", "diffusion_models (UNET / 扩散模型)"],
-    ["loras", "loras (LoRA 模型)"],
-    ["vae", "vae (VAE 模型)"],
-    ["text_encoders", "text_encoders (CLIP / T5 / Qwen 文本编码器)"],
-    ["checkpoints", "checkpoints (Checkpoints 大模型)"],
-    ["clip_vision", "clip_vision (CLIP Vision 视觉编码器)"],
-    ["controlnet", "controlnet (ControlNet 模型)"],
-    ["upscale_models", "upscale_models (放大模型)"],
-    ["audio_encoders", "audio_encoders (音频编码器)"],
+    ["diffusion_models", "diffusion_models (UNET / diffusion models)"],
+    ["loras", "loras (LoRA models)"],
+    ["vae", "vae (VAE models)"],
+    ["text_encoders", "text_encoders (CLIP / T5 / Qwen text encoders)"],
+    ["checkpoints", "checkpoints (full checkpoints)"],
+    ["clip_vision", "clip_vision (CLIP Vision encoders)"],
+    ["controlnet", "controlnet (ControlNet models)"],
+    ["upscale_models", "upscale_models (upscalers)"],
+    ["audio_encoders", "audio_encoders (audio encoders)"],
     ["model_patches", "model_patches (Model Patches)"],
     ["embeddings", "embeddings (Embeddings)"],
-    ["__custom__", "✏️ 自定义目录..."]
+    ["__custom__", "✏️ Custom directory..."]
   ];
 
   const css = `
@@ -106,46 +106,46 @@
   backdrop.innerHTML = `
     <div id="ct-ssd-modal">
       <div class="ct-ssd-hdr">
-        <h3>⚡ Colab 本地 SSD 模型按需下载 <span id="ct-ssd-free" class="ct-ssd-badge">SSD 检测中...</span></h3>
+        <h3>⚡ On-demand model downloads to the Colab local SSD <span id="ct-ssd-free" class="ct-ssd-badge">Checking SSD...</span></h3>
         <button class="ct-ssd-close" id="ct-ssd-close-btn">✕</button>
       </div>
       <div class="ct-ssd-body">
         <div class="ct-ssd-section">
-          <div class="ct-ssd-sec-title">1️⃣ 按工作流批量下载所需模型（自动识别工作流内全部模型并去重）</div>
+          <div class="ct-ssd-sec-title">1️⃣ Download all models a workflow needs (detects every model in the workflow, de-duplicated)</div>
           <button class="ct-ssd-action canvas-btn" id="ct-ssd-canvas-btn">
-            ⚡ 一键解析并下载【当前画布工作流】所需模型到本地 SSD
+            ⚡ Parse the <b>current canvas workflow</b> and download its models to the local SSD
           </button>
           <div class="ct-ssd-row">
             <input class="ct-ssd-input" id="ct-ssd-spec-input"
-              placeholder="或输入工作流 GitHub URL / 官方模板名 / 网盘文件名 (如 video_minimax_h3_r2v.json)" />
-            <button class="ct-ssd-action" id="ct-ssd-url-btn">📥 下载工作流模型</button>
+              placeholder="Or enter a workflow GitHub URL / official template name / Drive file name (e.g. video_minimax_h3_r2v.json)" />
+            <button class="ct-ssd-action" id="ct-ssd-url-btn">📥 Download workflow models</button>
           </div>
         </div>
 
         <div class="ct-ssd-section">
-          <div class="ct-ssd-sec-title">2️⃣ 指定单个模型 URL 下载到对应目录 (/content/ComfyUI/models/&lt;目录&gt;)</div>
+          <div class="ct-ssd-sec-title">2️⃣ Download a single model URL into a directory (/content/ComfyUI/models/&lt;dir&gt;)</div>
           <div class="ct-ssd-row">
             <input class="ct-ssd-input" id="ct-ssd-model-url"
-              placeholder="粘贴模型下载 URL (HuggingFace blob/resolve 链接或直链，粘贴后自动识别目录和文件名)" />
+              placeholder="Paste a model download URL (HuggingFace blob/resolve link or direct link; directory and file name are detected automatically)" />
           </div>
           <div class="ct-ssd-row">
-            <span style="font-size:12px;color:#a1a1aa;">目标目录:</span>
+            <span style="font-size:12px;color:#a1a1aa;">Target directory:</span>
             <select class="ct-ssd-select" id="ct-ssd-dir-select">${dirOptionsHtml}</select>
-            <input class="ct-ssd-input" id="ct-ssd-custom-dir" placeholder="输入自定义子目录名 (如 xlabs/ipadapters)" style="display:none;max-width:190px;" />
-            <input class="ct-ssd-input" id="ct-ssd-model-name" placeholder="保存文件名 (留空则从 URL 自动提取)" style="max-width:220px;" />
-            <button class="ct-ssd-action model-btn" id="ct-ssd-model-btn">🎯 下载到该目录</button>
+            <input class="ct-ssd-input" id="ct-ssd-custom-dir" placeholder="Custom subdirectory name (e.g. xlabs/ipadapters)" style="display:none;max-width:190px;" />
+            <input class="ct-ssd-input" id="ct-ssd-model-name" placeholder="Save as file name (empty = taken from the URL)" style="max-width:220px;" />
+            <button class="ct-ssd-action model-btn" id="ct-ssd-model-btn">🎯 Download to this directory</button>
           </div>
         </div>
 
         <div class="ct-ssd-progress-wrap" id="ct-ssd-prog-wrap">
           <div class="ct-ssd-progress-bar" id="ct-ssd-prog-bar"></div>
         </div>
-        <div id="ct-ssd-logs">等待指令...（已存在于本地 SSD 的模型会自动跳过，下载完成后自动刷新节点列表）</div>
+        <div id="ct-ssd-logs">Waiting for a command... (models already on the local SSD are skipped; node lists refresh automatically after downloads)</div>
         <div>
           <div style="font-size:12px;color:#a1a1aa;margin-bottom:4px;font-weight:600;">
-            📦 当前本地 SSD 已缓存模型 (/content/ComfyUI/models)：
+            📦 Models currently cached on the local SSD (/content/ComfyUI/models):
           </div>
-          <div class="ct-ssd-models" id="ct-ssd-model-list">加载中...</div>
+          <div class="ct-ssd-models" id="ct-ssd-model-list">Loading...</div>
         </div>
       </div>
     </div>
@@ -154,8 +154,8 @@
 
   const btn = document.createElement("button");
   btn.id = "ct-ssd-btn";
-  btn.innerHTML = "⬇️ SSD 模型下载";
-  btn.title = "按工作流或模型 URL 下载到 Colab 本地高速 SSD (已存在的模型自动跳过)";
+  btn.innerHTML = "⬇️ SSD Model Download";
+  btn.title = "Download models for a workflow or from a URL to the fast Colab local SSD (existing models are skipped)";
 
   function mountButton() {
     const rightMenu = document.querySelector(".comfyui-menu-right") ||
@@ -216,12 +216,12 @@
     try {
       const r = await fetch("/api/ct/ssd-status", { credentials: "include" });
       const d = await r.json();
-      freeBadge.textContent = `SSD 剩余: ${d.free_ssd_gb} GB`;
+      freeBadge.textContent = `SSD free: ${d.free_ssd_gb} GB`;
       modelListEl.replaceChildren();
       if (!d.models || d.models.length === 0) {
         const empty = document.createElement("div");
         empty.style.color = "#71717a";
-        empty.textContent = "暂无已下载模型";
+        empty.textContent = "No models downloaded yet";
         modelListEl.appendChild(empty);
       } else {
         for (const m of d.models) {
@@ -246,7 +246,7 @@
     canvasBtn.disabled = busy;
     urlBtn.disabled = busy;
     modelBtn.disabled = busy;
-    btn.innerHTML = busy ? "⏳ SSD 下载中..." : "⬇️ SSD 模型下载";
+    btn.innerHTML = busy ? "⏳ Downloading to SSD..." : "⬇️ SSD Model Download";
   }
 
   function watchJob(jobId) {
@@ -270,7 +270,7 @@
           progBar.style.width = job.status === "done" ? "100%" : "0%";
           await refreshStatus();
           if (job.status === "done") {
-            logBox.textContent += "\n✅ 全部模型已就绪！正在自动刷新 ComfyUI 节点模型列表...";
+            logBox.textContent += "\n✅ All models are ready! Refreshing ComfyUI node model lists...";
             logBox.scrollTop = logBox.scrollHeight;
             try { await window.app?.refreshComboInNodes?.(); } catch (e) {}
           }
@@ -281,7 +281,7 @@
 
   async function startJob(payload) {
     setBusy(true);
-    logBox.textContent = "正在提交下载任务...";
+    logBox.textContent = "Submitting download job...";
     progWrap.style.display = "block";
     progBar.style.width = "10%";
     try {
@@ -293,13 +293,13 @@
       });
       const data = await r.json();
       if (!r.ok) {
-        logBox.textContent = `❌ 错误: ${data.error || r.statusText}`;
+        logBox.textContent = `❌ Error: ${data.error || r.statusText}`;
         setBusy(false);
         return;
       }
       watchJob(data.job_id);
     } catch (e) {
-      logBox.textContent = `❌ 请求失败: ${e}`;
+      logBox.textContent = `❌ Request failed: ${e}`;
       setBusy(false);
     }
   }
@@ -317,7 +317,7 @@
   canvasBtn.onclick = () => {
     const wfJson = window.app?.graph?.serialize?.();
     if (!wfJson || !wfJson.nodes || !wfJson.nodes.length) {
-      logBox.textContent = "⚠️ 当前画布为空，请先在画布中打开一个工作流，或在下方输入工作流 URL / 模板名。";
+      logBox.textContent = "⚠️ The canvas is empty; open a workflow on the canvas first, or enter a workflow URL / template name below.";
       return;
     }
     startJob({ workflow_json: wfJson, workflow_name: "current_canvas_workflow.json" });
@@ -325,7 +325,7 @@
   urlBtn.onclick = () => {
     const spec = specInput.value.trim();
     if (!spec) {
-      logBox.textContent = "⚠️ 请输入工作流 GitHub URL、官方模板名或网盘工作流文件名。";
+      logBox.textContent = "⚠️ Enter a workflow GitHub URL, official template name or Drive workflow file name.";
       return;
     }
     startJob({ workflow: spec });
@@ -333,12 +333,12 @@
   modelBtn.onclick = () => {
     const mUrl = modelUrlInput.value.trim();
     if (!mUrl || !/^https?:\/\//i.test(mUrl)) {
-      logBox.textContent = "⚠️ 请输入有效的模型下载 URL (http:// 或 https://)。";
+      logBox.textContent = "⚠️ Enter a valid model download URL (http:// or https://).";
       return;
     }
     const targetDir = (dirSelect.value === "__custom__" ? customDirInput.value : dirSelect.value).trim().replace(/^\/+|\/+$/g, "");
     if (!targetDir) {
-      logBox.textContent = "⚠️ 请选择或输入目标模型子目录（如 loras, diffusion_models, vae）。";
+      logBox.textContent = "⚠️ Choose or enter a target model subdirectory (e.g. loras, diffusion_models, vae).";
       return;
     }
     let mName = modelNameInput.value.trim().replace(/^\/+/, "");
@@ -348,7 +348,7 @@
       } catch (e) {}
     }
     if (!mName) {
-      logBox.textContent = "⚠️ 无法从 URL 自动提取文件名，请在「保存文件名」输入框中指定文件名（如 model.safetensors）。";
+      logBox.textContent = "⚠️ Cannot extract a file name from the URL; enter one in the \"Save as file name\" box (e.g. model.safetensors).";
       return;
     }
     startJob({

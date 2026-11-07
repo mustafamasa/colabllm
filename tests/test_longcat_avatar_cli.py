@@ -41,7 +41,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path=='/jobs/job-42':
             self.server.polls+=1
             status='running' if self.server.polls==1 else self.server.final_status
-            data={'id':'job-42','status':status,'message':'正在生成' if status=='running' else 'test failure',
+            data={'id':'job-42','status':status,'message':'Generating' if status=='running' else 'test failure',
                   'result':{'path':'/drive/output/video with space.mp4','metadata':{'frames':21}}}
             self.send(200,json.dumps(data).encode())
         elif self.path=='/jobs/job-42/video':
@@ -50,7 +50,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.server.list_failures:
                 self.server.list_failures-=1
                 self.send(503,b'{}');return
-            self.send(200,json.dumps({'files':[{'name':'声音.wav','path':'drive://素材/声音.wav'}]}).encode())
+            self.send(200,json.dumps({'files':[{'name':'ses_kaydı.wav','path':'drive://çekimler/ses_kaydı.wav'}]}).encode())
         else:self.send(404,b'{}')
 
 class CliTest(unittest.TestCase):
@@ -77,14 +77,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(data['image'],{'upload':'/tmp/upload/person.png'})
         self.assertTrue(data['auto_duration'])
     def test_wait_download_and_manual_duration(self):
-        prompt=self.root/'prompt.txt';prompt.write_text('人物正在说话',encoding='utf-8')
+        prompt=self.root/'prompt.txt';prompt.write_text('Kişi konuşuyor',encoding='utf-8')
         output=self.root/'nested/result.mp4'
         p=self.cli('generate','--audio',str(self.audio),'--prompt-file',str(prompt),
                    '--frames','17','--segments','2','--poll','.01','-o',str(output))
         self.assertEqual(p.returncode,0,p.stderr)
         self.assertEqual(output.read_bytes(),VIDEO)
         self.assertEqual(json.loads(p.stdout)['status'],'completed')
-        self.assertIn('已提交任务：job-42',p.stderr)
+        self.assertIn('Job submitted: job-42',p.stderr)
         self.assertEqual(self.server.submitted['image'],None)
         self.assertEqual((self.server.submitted['frames'],self.server.submitted['segments']),(17,2))
         self.assertFalse(self.server.submitted['auto_duration'])
@@ -123,13 +123,13 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(self.server.uploads,[])
 
     def test_drive_inputs_and_output_do_not_upload_local_files(self):
-        p=self.cli('generate','--audio-drive','素材/声音.wav','--image','drive://素材/人像.png',
-                   '--prompt','test','--drive-output','生成/作品')
+        p=self.cli('generate','--audio-drive','çekimler/ses_kaydı.wav','--image','drive://çekimler/portre_ğ.png',
+                   '--prompt','test','--drive-output','çıktılar/eser')
         self.assertEqual(p.returncode,0,p.stderr)
         self.assertEqual(self.server.uploads,[])
-        self.assertEqual(self.server.submitted['audio'],{'drive':'drive://素材/声音.wav'})
-        self.assertEqual(self.server.submitted['image'],{'drive':'drive://素材/人像.png'})
-        self.assertEqual(self.server.submitted['output_dir'],'drive://生成/作品')
+        self.assertEqual(self.server.submitted['audio'],{'drive':'drive://çekimler/ses_kaydı.wav'})
+        self.assertEqual(self.server.submitted['image'],{'drive':'drive://çekimler/portre_ğ.png'})
+        self.assertEqual(self.server.submitted['output_dir'],'drive://çıktılar/eser')
     def test_mixed_drive_and_local_inputs(self):
         p=self.cli('generate','--audio','drive://voice.wav','--image',str(self.image),'--prompt','test')
         self.assertEqual(p.returncode,0,p.stderr)
@@ -137,13 +137,13 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.server.submitted['audio'],{'drive':'drive://voice.wav'})
     def test_drive_listing_recovers_from_transient_failure(self):
         self.server.list_failures=1
-        p=self.cli('ls-drive','素材')
+        p=self.cli('ls-drive','çekimler')
         self.assertEqual(p.returncode,0,p.stderr)
-        self.assertIn('正在重试',p.stderr)
-        self.assertEqual(json.loads(p.stdout)['files'][0]['name'],'声音.wav')
+        self.assertIn('retrying',p.stderr)
+        self.assertEqual(json.loads(p.stdout)['files'][0]['name'],'ses_kaydı.wav')
     def test_drive_listing(self):
-        p=self.cli('ls-drive','素材')
+        p=self.cli('ls-drive','çekimler')
         self.assertEqual(p.returncode,0,p.stderr)
-        self.assertEqual(json.loads(p.stdout)['files'][0]['name'],'声音.wav')
+        self.assertEqual(json.loads(p.stdout)['files'][0]['name'],'ses_kaydı.wav')
 
 if __name__=='__main__':unittest.main()

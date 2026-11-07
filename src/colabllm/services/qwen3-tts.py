@@ -23,11 +23,11 @@ Usage:
   colabllm qwen3-tts up --domain                     # fixed domain qwen3-tts.example.com
   colabllm qwen3-tts status
   colabllm qwen3-tts voices                          # list 9 built-in + uploaded/designed voices
-  colabllm qwen3-tts tts "其实我真的有发现，我是一个特别善于观察别人情绪的人。" --voice vivian --instruct "用特别开心的语气说" -o out.wav
-  colabllm qwen3-tts tts "哥哥，你回来啦，人家等了你好久好久了！" --voice-design "体现撒娇稚嫩的萝莉女声，音调偏高且起伏明显" -o design.wav
+  colabllm qwen3-tts tts "I've noticed that I'm someone who is really good at reading other people's emotions." --voice vivian --instruct "Say it in a very happy tone" -o out.wav
+  colabllm qwen3-tts tts "You're back! I've been waiting for you for so long!" --voice-design "A cute, youthful girl's voice with a high pitch and lively intonation" -o design.wav
   colabllm qwen3-tts tts "Hello, this is 3-second zero-shot voice cloning!" --ref-audio sample.wav -o clone.wav
-  colabllm qwen3-tts design-voice --instruct "沉稳磁性的中年男播音员声音" --name announcer -o announcer_ref.wav
-  colabllm qwen3-tts tts "欢迎收听今天的新闻节目。" --voice announcer -o news.wav
+  colabllm qwen3-tts design-voice --instruct "A calm, magnetic middle-aged male announcer voice" --name announcer -o announcer_ref.wav
+  colabllm qwen3-tts tts "Welcome to today's news program." --voice announcer -o news.wav
   colabllm qwen3-tts down
 """
 from __future__ import annotations
@@ -494,7 +494,7 @@ def prepare_up(args):
     variant = getattr(args, "up_CT_QWEN3_TTS_VARIANT")
     if variant:
         if variant.lower() not in VARIANT_REPOS:
-            raise ValueError("未知 --variant，可选值：" + ", ".join(VARIANT_REPOS))
+            raise ValueError("Unknown --variant; choices: " + ", ".join(VARIANT_REPOS))
         SERVICE.env["CT_QWEN3_TTS_MODEL"] = VARIANT_REPOS[variant.lower()]
     for flag, env in UP_ENV_FLAGS.items():
         value = getattr(args, "up_" + env)

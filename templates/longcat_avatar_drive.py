@@ -9,7 +9,7 @@ UPLOAD_ROOT=Path(os.environ.get('GRADIO_TEMP_DIR','/tmp/gradio'))
 
 def resolve_drive(spec, *, directory=False, create=False, root=DRIVE_ROOT):
     root=Path(root).resolve()
-    if not root.is_dir():raise ValueError('Google Drive 尚未挂载')
+    if not root.is_dir():raise ValueError('Google Drive is not mounted')
     text=str(spec)
     for prefix in ('drive://','gdrive://'):
         if text.startswith(prefix):text=unquote(text[len(prefix):]);break
@@ -17,24 +17,24 @@ def resolve_drive(spec, *, directory=False, create=False, root=DRIVE_ROOT):
     candidate=Path(text)
     if not candidate.is_absolute():candidate=root/candidate
     candidate=candidate.resolve()
-    if not candidate.is_relative_to(root):raise ValueError('路径必须位于 Google Drive 的 MyDrive 内')
+    if not candidate.is_relative_to(root):raise ValueError('The path must be inside MyDrive on Google Drive')
     if directory:
         if create:candidate.mkdir(parents=True,exist_ok=True)
-        if not candidate.is_dir():raise ValueError(f'网盘目录不存在：{spec}')
-    elif not candidate.is_file():raise ValueError(f'网盘文件不存在：{spec}')
+        if not candidate.is_dir():raise ValueError(f'Drive directory does not exist: {spec}')
+    elif not candidate.is_file():raise ValueError(f'Drive file does not exist: {spec}')
     return candidate
 
 
 def resolve_input(reference, *, drive_root=DRIVE_ROOT, upload_root=UPLOAD_ROOT):
     if not isinstance(reference,dict) or len(reference)!=1:
-        raise ValueError('输入必须指定一个 drive 或 upload 路径')
+        raise ValueError('The input must specify a drive or upload path')
     if 'drive' in reference:return resolve_drive(reference['drive'],root=drive_root)
     if 'upload' in reference:
         path=Path(reference['upload']).resolve()
         if not path.is_relative_to(Path(upload_root).resolve()) or not path.is_file():
-            raise ValueError('上传文件必须位于服务的上传缓存内')
+            raise ValueError('Uploaded files must be inside the service upload cache')
         return path
-    raise ValueError('不支持的输入路径类型')
+    raise ValueError('Unsupported input path type')
 
 
 def list_drive(spec='drive://', *, root=DRIVE_ROOT):

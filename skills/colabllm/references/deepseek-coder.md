@@ -1,22 +1,22 @@
 <!-- Generated from docs/deepseek-coder.md; edit the source and run tools/sync_runtime_docs.py. -->
 
-# DeepSeek Coder：DeepSeek-V4.1-Flash 编程与视觉推理（硬件自适应最大上下文）
+# DeepSeek Coder: DeepSeek-V4.1-Flash coding and vision inference (hardware-adaptive maximum context)
 
-默认 **G4**（RTX PRO 6000 Blackwell，96 GB VRAM），兼容 **H100**（80 GB HBM3）与 **A100**（80 GB / 40 GB）；通过 `llama-server` 原生 Bearer 认证部署 `Abiray/DeepSeek-V4.1-Flash-1017-Uncensored-GSQ-RCO-Coder-GGUF`（50% 路由专家剪枝 `192` 专家/层 `IQ2_XXS` 主干 72.1 GB + `IQ4_NL` Engram 条件记忆表 110.6 GB + `BF16` `deepseek41v` 视觉投影器 0.97 GB），并在启动时根据实际 GPU 显存与系统内存自动设置最大安全上下文窗口（`G4` 默认满血 **1,048,576（1M）** 上下文 + **103 GiB Engram 全量常驻主机 DDR5 内存** + **默认开启思考，客户端按请求自行决定是否思考**）。
+Defaults to **G4** (RTX PRO 6000 Blackwell, 96 GB VRAM) and also supports **H100** (80 GB HBM3) and **A100** (80 GB / 40 GB). Deploys `Abiray/DeepSeek-V4.1-Flash-1017-Uncensored-GSQ-RCO-Coder-GGUF` with `llama-server`'s native Bearer authentication (50% routed-expert pruning to `192` experts/layer: `IQ2_XXS` backbone 72.1 GB + `IQ4_NL` Engram conditional memory table 110.6 GB + `BF16` `deepseek41v` vision projector 0.97 GB), and at startup sets the maximum safe context window from the actual GPU VRAM and system memory (`G4` defaults to the full **1,048,576 (1M)** context + **103 GiB Engram fully resident in host DDR5 memory** + **thinking on by default, with clients deciding per request whether to think**).
 
-共享的安装前置、域名、认证、超时和停止行为见 [运行时通用操作](runtime-common.md)。以下命令均在本机执行。
+Shared prerequisites, domains, authentication, timeouts and stop behavior are in [Common runtime operations](runtime-common.md). All commands below run on the local machine.
 
-## 硬件档位与自动上下文窗口
+## Hardware tiers and automatic context window
 
-默认 `--context auto` 会实时探测 Colab VM 的显存与系统内存，结合 `deepseek41` 跨层共享压缩 KV Cache（`f16` 仅约 `3.125 KiB/token`，1M 上下文 KV 约 `3.125 GiB`）与图工作区预算自动对齐最大窗口，并在遇到冷启动显存峰值不足时按阶梯自动回退：
+The default `--context auto` probes the Colab VM's VRAM and system memory live and, combining `deepseek41`'s cross-layer shared compressed KV cache (`f16` only about `3.125 KiB/token`, about `3.125 GiB` KV for a 1M context) with the graph workspace budget, aligns to the maximum window, stepping down automatically when the cold-start VRAM peak does not fit:
 
-| GPU 规格 | 权重与 Engram 放置 | 默认自动窗口 (`--context auto`) | 说明 |
+| GPU | Weight and Engram placement | Default automatic window (`--context auto`) | Notes |
 | :--- | :--- | :--- | :--- |
-| **G4（默认，96 GB VRAM / ~176 GiB RAM）** | `full-gpu` + `engram_in_ram=true` | **`1,048,576`（满血 1M）** | 73.1 GB 主干+视觉全驻显存，103 GiB Engram 全驻主机 DDR5 内存（零云盘缺页中断），`-b 4096 -ub 512` 高速 Prefill |
-| **H100 / A100（80 GB VRAM / ~167 GiB RAM）** | `full-gpu` + `engram_in_ram=true` | **`~638,976`（~624K）** | 全 GPU + Engram 常驻内存；显式传 `--context 1m` 时自动卸载 3 层 MoE 专家到内存以容纳 1M 窗口 |
-| **A100（40 GB VRAM / ~83.5 GiB RAM）** | `hybrid-cpu-moe` + `mmap/lazy` | **`~327,680`（320K）** | 注意力与共享专家常驻 GPU，路由专家卸载至系统内存，Engram 自动退回本地 SSD 按需分页读取 |
+| **G4 (default, 96 GB VRAM / ~176 GiB RAM)** | `full-gpu` + `engram_in_ram=true` | **`1,048,576` (full 1M)** | 73.1 GB backbone + vision fully in VRAM, 103 GiB Engram fully in host DDR5 memory (no cloud-disk page faults), `-b 4096 -ub 512` fast prefill |
+| **H100 / A100 (80 GB VRAM / ~167 GiB RAM)** | `full-gpu` + `engram_in_ram=true` | **`~638,976` (~624K)** | Full GPU + Engram resident in memory; passing `--context 1m` explicitly offloads 3 MoE expert layers to memory to fit a 1M window |
+| **A100 (40 GB VRAM / ~83.5 GiB RAM)** | `hybrid-cpu-moe` + `mmap/lazy` | **`~327,680` (320K)** | Attention and shared experts resident on GPU, routed experts offloaded to system memory, Engram falls back to on-demand paging from the local SSD |
 
-本地离线预览各规格或自定义显存的规划结果：
+Preview the plan for each tier or a custom VRAM size locally and offline:
 
 ```bash
 colabllm deepseek-coder plan
@@ -25,37 +25,37 @@ colabllm deepseek-coder plan --preset H100 --context 1m
 colabllm deepseek-coder plan --vram-gb 80 --ram-gb 167
 ```
 
-## 启动与凭据
+## Startup and credentials
 
 ```bash
-# 默认 G4 + 自动满血 1M 上下文 + 默认开启思考（--reasoning on，客户端可按请求关闭）
+# Default G4 + automatic full 1M context + thinking on by default (--reasoning on; clients can turn it off per request)
 colabllm deepseek-coder up --ready-timeout 5400
 
-# G4 + 绑定项目固定子域名（默认别名 deepseek.<base-domain>）
+# G4 + bind the project's fixed subdomain (default alias deepseek.<base-domain>)
 colabllm deepseek-coder up --domain
 
-# H100 (80 GB) 自动最大全 GPU 窗口或指定 1M 窗口（自动卸载少量 MoE 层）
+# H100 (80 GB) with the automatic maximum full-GPU window or an explicit 1M window (a few MoE layers offloaded automatically)
 colabllm deepseek-coder up --gpu H100 --domain
 colabllm deepseek-coder up --gpu H100 --domain --context 1m
 
-# 若希望未指定 enable_thinking 的请求默认直出，可显式指定 --reasoning off；也可设置默认思考强度（minimal|low|medium|high|xhigh|max 或 1..100）
+# To answer directly by default for requests that do not set enable_thinking, pass --reasoning off; a default thinking effort can also be set (minimal|low|medium|high|xhigh|max or 1..100)
 colabllm deepseek-coder up --domain --reasoning off
 colabllm deepseek-coder up --domain --reasoning-effort medium
 
-# 查询运行状态、实际分配的 n_ctx 与认证密钥
+# Query the running state, the actually allocated n_ctx and the auth key
 colabllm deepseek-coder status --json
 colabllm deepseek-coder models
 colabllm deepseek-coder info --json --show-secrets
 colabllm deepseek-coder logs -n 100
 ```
 
-首次启动需并发编译对应 GPU 架构的 `llama-server`（自动归档缓存至 `MyDrive/colab-llm/deepseek-coder/runtime-cache/`）并将约 183.7 GB 模型分片下载至 Colab 本地 NVMe SSD（`/content/deepseek-coder/model`，自动建立第 6 分片 `Engram` 软链接并开启 `HF_XET_CHUNK_CACHE_SIZE_BYTES=0` 防双倍占盘），建议保留 `--ready-timeout 5400`。
+The first start compiles `llama-server` for the GPU architecture in parallel (cache archived automatically to `MyDrive/colab-llm/deepseek-coder/runtime-cache/`) and downloads about 183.7 GB of model shards to the Colab local NVMe SSD (`/content/deepseek-coder/model`, with an automatic `Engram` symlink for shard 6 and `HF_XET_CHUNK_CACHE_SIZE_BYTES=0` to avoid double disk usage); keeping `--ready-timeout 5400` is recommended.
 
-API Base URL 为返回的 `url` 后加 `/v1`；`colabllm deepseek-coder models` 会同时校验鉴权并返回服务端实际生效的模型 alias、`context_allocated`（`n_ctx`）和 `vision` 模态状态。`/health` 可无需认证返回 200，验证 API Key 请访问 `/v1/models`。
+The API base URL is the returned `url` plus `/v1`; `colabllm deepseek-coder models` verifies authentication and returns the model alias actually in effect, `context_allocated` (`n_ctx`) and the `vision` modality state. `/health` may return 200 without authentication, so verify the API key against `/v1/models`.
 
-## 调用代码与多模态 API（兼容 Claude Code / OpenAI 客户端）
+## Calling code and multimodal APIs (compatible with Claude Code / OpenAI clients)
 
-下例使用 Python 标准库调用 `/v1/chat/completions`，不安装第三方 SDK，不打印密钥并拒绝重定向：
+The example below calls `/v1/chat/completions` with the Python standard library only, installs no third-party SDK, never prints the key and refuses redirects:
 
 ```python
 import json
@@ -77,7 +77,7 @@ with opener.open(urllib.request.Request(base + "/v1/models", headers=headers), t
 
 payload = {
     "model": model,
-    "messages": [{"role": "user", "content": "用 Python 实现带超时控制的异步 TCP 端口连通性探测函数。"}],
+    "messages": [{"role": "user", "content": "Implement an async TCP port reachability probe with timeout control in Python."}],
     "temperature": 0.2,
     "max_tokens": 2048,
     "stream": False,
@@ -88,7 +88,7 @@ with opener.open(urllib.request.Request(
     print(msg.get("content") or msg.get("reasoning_content"))
 ```
 
-服务默认开启思考（`--reasoning on --reasoning-format deepseek`），是否思考由客户端决定：Agent 或客户端可在**任意单次请求**中通过 `/v1/chat/completions` 请求体设置 `chat_template_kwargs.enable_thinking` 为 `false` 直出低延迟回答（适合高频工具调用）或 `true` 开启思考，并调节思考强度（`minimal`/`low`/`medium`/`high`/`xhigh`/`max` 或整数 `1..100`，默认校准值 `50`）或设置思考 Token 硬上限（思考内容自动分离至 `message.reasoning_content`）：
+Thinking is on by default (`--reasoning on --reasoning-format deepseek`) and clients decide whether to think: in **any single request** to `/v1/chat/completions`, an agent or client can set `chat_template_kwargs.enable_thinking` to `false` for low-latency direct answers (good for frequent tool calls) or `true` to think, adjust the thinking effort (`minimal`/`low`/`medium`/`high`/`xhigh`/`max` or an integer `1..100`, default calibrated value `50`), or set a hard cap on thinking tokens (thinking content is separated into `message.reasoning_content` automatically):
 
 ```json
 {
@@ -100,15 +100,15 @@ with opener.open(urllib.request.Request(
 }
 ```
 
-多模态视觉输入（如截图转代码、架构图解析）将消息 `content` 设为内容块列表：
+For multimodal vision input (e.g. screenshot to code, architecture diagram analysis), set the message `content` to a list of content blocks:
 
 ```json
-[{"type": "text", "text": "根据界面截图编写对应的 HTML 与 Tailwind CSS"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE_BASE64"}}]
+[{"type": "text", "text": "Write the matching HTML and Tailwind CSS for this UI screenshot"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,IMAGE_BASE64"}}]
 ```
 
-`IMAGE_BASE64` 为真实图像的 base64 占位符；远端服务无法直接读取本机磁盘路径。若无需视觉能力、希望额外腾出约 1 GB 显存，可在启动时传入 `--no-vision`。
+`IMAGE_BASE64` is a placeholder for the real image's base64; the remote service cannot read local disk paths. If you do not need vision and want to free about 1 GB of VRAM, pass `--no-vision` at startup.
 
-## 多实例、存储限制与停止
+## Multiple instances, storage limits and stopping
 
 ```bash
 colabllm deepseek-coder up -i 2 --domain
@@ -117,6 +117,6 @@ colabllm deepseek-coder ps --json
 colabllm deepseek-coder down -i 2
 ```
 
-- **主机内存常驻 Engram 与 SSD 自动回退**：在系统内存充足的机型（如 `G4` ~176 GiB RAM、`H100` ~167 GiB RAM）上，110.6 GB 的 `DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf` 通过 `--load-mode none --lazy-mode off --override-tensor per_layer_token_embd.weight=CPU` 全量读入主机 DDR5 内存并释放重复的文件 Page Cache，彻底消除云盘随机缺页延迟；在较小内存机型（如 `A100-40G`）上自动切换为 `--load-mode mmap --lazy-mode on` 按需分页读取。切勿将工作目录改指 `/content/drive`。
-- **低显存机型限制**：`T4`（16 GB）与常规 `L4`（24 GB VRAM + ~53 GB RAM）总内存不足以容纳 72.1 GB 主干权重，请使用 `G4`、`H100` 或 `A100`。
-- **持久性**：编译好的 `llama-server` 归档与校验状态持久保存在 `MyDrive/colab-llm/deepseek-coder/`；执行 `down` 会释放 Colab VM 及本地 SSD 模型副本，聊天请求内容不会自动写入 Drive。
+- **Engram resident in host memory with automatic SSD fallback**: on machines with enough system memory (e.g. `G4` ~176 GiB RAM, `H100` ~167 GiB RAM), the 110.6 GB `DeepSeek-V4.1-Flash-Engram-IQ4_NL.gguf` is read fully into host DDR5 memory via `--load-mode none --lazy-mode off --override-tensor per_layer_token_embd.weight=CPU` and the duplicate file page cache is released, eliminating random cloud-disk page-fault latency; on smaller-memory machines (e.g. `A100-40G`) it switches to `--load-mode mmap --lazy-mode on` on-demand paging. Never point the working directory at `/content/drive`.
+- **Low-VRAM machine limits**: `T4` (16 GB) and regular `L4` (24 GB VRAM + ~53 GB RAM) do not have enough total memory for the 72.1 GB backbone; use `G4`, `H100` or `A100`.
+- **Persistence**: the compiled `llama-server` archive and verification state are kept in `MyDrive/colab-llm/deepseek-coder/`; `down` releases the Colab VM and the local SSD model copy, and chat content is never written to Drive automatically.

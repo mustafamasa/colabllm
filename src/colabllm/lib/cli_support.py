@@ -35,14 +35,14 @@ def diagnostic(message, color=None):
 def nonnegative_seconds(value):
     seconds = float(value)
     if not math.isfinite(seconds) or seconds < 0:
-        raise ValueError('秒数必须是有限的非负数')
+        raise ValueError('seconds must be a finite, non-negative number')
     return seconds
 
 
 def positive_seconds(value):
     seconds = nonnegative_seconds(value)
     if seconds == 0:
-        raise ValueError('秒数必须大于 0')
+        raise ValueError('seconds must be greater than 0')
     return seconds
 
 
@@ -51,7 +51,7 @@ def command_timeout(default=300):
     try:
         return positive_seconds(value) if value else default
     except ValueError:
-        raise UsageError('COLABLLM_COMMAND_TIMEOUT 必须是大于 0 的有限秒数') from None
+        raise UsageError('COLABLLM_COMMAND_TIMEOUT must be a finite number of seconds greater than 0') from None
 
 
 def http_timeout(timeout=None, default=120):
@@ -62,7 +62,7 @@ def http_timeout(timeout=None, default=120):
 
 
 class Deadline:
-    def __init__(self, timeout=0, message='等待超时；后台任务继续运行，可稍后查询'):
+    def __init__(self, timeout=0, message='Timed out waiting; the background task keeps running and can be queried later'):
         timeout = nonnegative_seconds(timeout)
         self.end = time.monotonic() + timeout if timeout else None
         self.message = message
@@ -84,9 +84,9 @@ def origin(url):
     try:
         port = parsed.port
     except ValueError:
-        raise CliError('服务 URL 端口格式无效') from None
+        raise CliError('Invalid port in service URL') from None
     if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
-        raise CliError('服务 URL 必须是无内嵌账号密码的 HTTP(S) 地址')
+        raise CliError('The service URL must be an HTTP(S) address without embedded credentials')
     return (parsed.scheme.lower(), parsed.hostname.lower(), port or (443 if parsed.scheme == 'https' else 80))
 
 
@@ -94,20 +94,20 @@ def resolve_endpoint(state, url=None, token=None, *, url_env=None, token_env=Non
     selected = (url or (os.environ.get(url_env) if url_env else None) or state.get('url') or '').rstrip('/')
     explicit = (token or (os.environ.get(token_env) if token_env else None) or '').strip()
     if not selected:
-        raise CliError('缺少服务地址：先启动服务，或显式提供 --url 和 API Token')
+        raise CliError('No service address: start the service first, or pass --url and an API token explicitly')
     selected_origin = origin(selected)
     if explicit:
         return selected, explicit
     saved_url, saved_token = state.get('url'), state.get('api_token')
     if not saved_url or not saved_token or origin(saved_url) != selected_origin:
-        raise CliError('服务来源已改变或没有对应凭据；请显式提供 API Token 参数或对应环境变量')
+        raise CliError('The service origin changed or has no matching credentials; pass the API token argument or its environment variable explicitly')
     return selected, saved_token
 
 
 class SameOriginRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if req.has_header('Authorization') and origin(req.full_url) != origin(newurl):
-            raise CliError('拒绝向其他站点转发认证信息；请检查服务 URL 或重定向配置')
+            raise CliError('Refusing to forward credentials to another site; check the service URL or redirect configuration')
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -133,7 +133,7 @@ def configure_output():
             try:
                 os.environ['COLABLLM_COMMAND_TIMEOUT'] = str(positive_seconds(value))
             except (ValueError, TypeError):
-                raise UsageError('--command-timeout 需要大于 0 的有限秒数') from None
+                raise UsageError('--command-timeout requires a finite number of seconds greater than 0') from None
         else:
             args.append(arg)
     sys.argv[1:] = args
@@ -154,7 +154,7 @@ def run_cli(action):
             os.dup2(sink.fileno(), sys.stdout.fileno())
         raise SystemExit(141) from None
     except KeyboardInterrupt:
-        diagnostic('已中断当前命令；可用 status/job 查看服务或任务状态。')
+        diagnostic('Command interrupted; use status/job to check the service or task state.')
         raise SystemExit(130) from None
     except (OSError, ValueError, RuntimeError, http.client.HTTPException, subprocess.SubprocessError) as error:
         if debug:

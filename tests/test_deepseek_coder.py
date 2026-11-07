@@ -194,7 +194,7 @@ class DeepSeekShardSymlinkAndArgsTest(unittest.TestCase):
         import struct
 
         stock_tmpl = (
-            '{%- set DSML = "｜DSML｜" -%}\n'
+            '{%- set DSML = "\uff5cDSML\uff5c" -%}\n'
             '{%- if reasoning_effort is not defined or reasoning_effort is none -%}{%- set reasoning_effort = "high" -%}{%- endif -%}\n'
             '{%- set effort_map = {"low": 50, "high": 75, "max": 100} -%}\n'
             '{{- raise_exception("Invalid reasoning effort: should be int within [1,100] or one of \\"low\\", \\"high\\", \\"max\\"") -}}\n'
@@ -219,7 +219,7 @@ class DeepSeekShardSymlinkAndArgsTest(unittest.TestCase):
             self.assertIn('"medium": 60', patched_text)
             self.assertIn('"minimal": 25', patched_text)
             self.assertIn("reasoning_effort = 50", patched_text)
-            self.assertIn("｜DSML｜", patched_text)
+            self.assertIn("\uff5cDSML\uff5c", patched_text)
 
             engram = root / rt.ENGRAM_FILENAME
             engram.write_bytes(b"GGUF-ENGRAM")

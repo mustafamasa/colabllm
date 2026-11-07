@@ -385,7 +385,7 @@ def _design_and_register_voice_sync(body: dict[str, Any]) -> tuple[int, dict[str
         sample_text = (
             "Hello! This is a sample of my designed voice, ready for speech synthesis."
             if language == "English"
-            else "你好！这是根据你的描述生成的专属定制音色示例。"
+            else "Hello! This is a sample of the custom voice generated from your description."
         )
 
     status, audio_bytes, headers = _call_aux_worker_sync({

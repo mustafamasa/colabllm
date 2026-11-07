@@ -51,8 +51,51 @@ class LifecycleSafetyTest(unittest.TestCase):
         self.assertEqual(self.state.load(), {f'key_{n}': n for n in range(40)})
 
     def test_concurrent_lifecycle_operation_is_rejected(self):
-        with self.state.lock('operation'), self.assertRaisesRegex(RuntimeError, '生命周期'):
+        with self.state.lock('operation'), self.assertRaisesRegex(RuntimeError, 'lifecycle'):
             svc.cmd_down(self.service, argparse.Namespace(all=False, delete_tunnel=False))
+
+    def purge_args(self, **kw):
+        return argparse.Namespace(**{'delete_tunnel': False, 'keep_tunnel': False, **kw})
+
+    def test_purge_deletes_stopped_state_after_confirming_session_stop(self):
+        self.state.save(api_token='test-only', url=None)
+        self.state.log_path.write_text('log')
+        with patch.object(svc, 'run', return_value=argparse.Namespace(returncode=0)) as run, patch('sys.stderr'):
+            svc.cmd_purge(self.service, self.purge_args())
+        run.assert_called_once_with(['colab', 'stop', '-s', 'test'], check=False)
+        self.assertFalse(self.state.dir.exists())
+
+    def test_purge_refuses_running_instance_and_keeps_state(self):
+        before = self.state.save(runner_pid=os.getpid(), runner_identity=processes.process_identity(os.getpid()))
+        with patch.object(svc, 'run') as run, self.assertRaisesRegex(CliError, 'still running'):
+            svc.cmd_purge(self.service, self.purge_args())
+        run.assert_not_called()
+        self.assertEqual(self.state.load(), before)
+
+    def test_purge_keeps_state_when_colab_stop_is_not_confirmed(self):
+        before = self.state.save(api_token='test-only')
+        with patch.object(svc, 'run', return_value=argparse.Namespace(returncode=3)), patch('sys.stderr'), \
+             self.assertRaises(CliError) as error:
+            svc.cmd_purge(self.service, self.purge_args())
+        self.assertEqual(error.exception.code, 3)
+        self.assertEqual(self.state.load(), before)
+
+    def test_purge_requires_an_explicit_choice_for_owned_tunnels(self):
+        self.state.save(tunnel_id='t-1', hostname='test.example.com')
+        with patch.object(svc, 'run') as run, self.assertRaisesRegex(ValueError, '--delete-tunnel'):
+            svc.cmd_purge(self.service, self.purge_args())
+        run.assert_not_called()
+        with patch.object(svc, 'run', return_value=argparse.Namespace(returncode=0)), \
+             patch.object(svc, 'delete_named_tunnel') as delete, patch('sys.stderr'):
+            svc.cmd_purge(self.service, self.purge_args(delete_tunnel=True))
+        delete.assert_called_once()
+        self.assertFalse(self.state.dir.exists())
+
+    def test_purge_is_rejected_during_another_lifecycle_operation(self):
+        self.state.save(api_token='test-only')
+        with self.state.lock('operation'), self.assertRaisesRegex(RuntimeError, 'lifecycle'):
+            svc.cmd_purge(self.service, self.purge_args())
+        self.assertTrue(self.state.path.exists())
 
     def test_failed_down_preserves_all_tracking_and_does_not_kill_runner(self):
         before = self.state.save(runner_pid=2345, runner_identity='example', ready=True,

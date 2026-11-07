@@ -12,7 +12,7 @@ Service aliases and instance suffixes are retained, e.g. `qwen-2.example.com`.
 `Service.zone` is a historical alias suffix, not a default deployment target.
 
 Global configuration commands are documented in
-[README.md](../../../../README.md#cloudflare-tunnel-配置).
+[README.md](../../../../README.md#cloudflare-tunnel-yapılandırması).
 Use `colabllm tunnel-config --clear` to clear the saved domain; if FRP is enabled,
 disable it first because FRP requires a hostname. Environment overrides still apply.
 

@@ -25,7 +25,7 @@ Usage:
   colabllm ollama endpoints [--json] [--show-secrets]
   colabllm ollama models [--json]
   colabllm ollama pull [-i ID | -A] qwen2.5:7b [--alias gpt-4o] [--preload]
-  colabllm ollama run qwen2.5:0.5b "用一句话介绍你自己" [--api ollama|openai|anthropic]
+  colabllm ollama run qwen2.5:0.5b "Introduce yourself in one sentence" [--api ollama|openai|anthropic]
   colabllm ollama preload qwen2.5:7b --keep-alive -1
   colabllm ollama unload qwen2.5:7b
   colabllm ollama cp qwen2.5:7b gpt-4o-mini
@@ -145,7 +145,7 @@ def _resolve_target_services(all_instances: bool = False, instances_csv: str = "
                 s.base_name = base_name
                 targets.append(s)
         if not targets:
-            die(f"没有运行中的 {base_name} 实例；请先执行 `colabllm ollama ps` 或 `colabllm ollama up`")
+            die(f"No running {base_name} instance; run `colabllm ollama ps` or `colabllm ollama up` first")
         return targets
     return [SERVICE]
 
@@ -294,18 +294,18 @@ def _cmd_models(args: argparse.Namespace) -> None:
 def _cmd_pull(args: argparse.Namespace) -> None:
     models = [validate_model_spec(m) for raw in args.models for m in raw.split(",") if m.strip()]
     if not models:
-        raise UsageError("请至少指定一个要下载的模型名称")
+        raise UsageError("Specify at least one model name to pull")
     if args.alias and len(models) != 1:
-        raise UsageError("--alias 仅在单次拉取单个模型时可用；多模型请使用 `colabllm ollama cp <src> <dst>`")
+        raise UsageError("--alias only works when pulling a single model; for several models use `colabllm ollama cp <src> <dst>`")
     alias_name = validate_model_spec(args.alias) if args.alias else None
     if args.keep_alive is not None:
         validate_duration(args.keep_alive, "--keep-alive")
 
     targets = _resolve_target_services(all_instances=args.all_instances, instances_csv=args.instances)
     if args.url and len(targets) > 1:
-        raise UsageError("--url 仅针对单个端点，不能与 -A / --instances 多实例同时使用")
+        raise UsageError("--url targets a single endpoint and cannot be combined with -A / --instances")
 
-    deadline = Deadline(args.timeout, "拉取模型超时；远端下载可能仍在继续，可查看 logs 或稍后重试")
+    deadline = Deadline(args.timeout, "Timed out pulling the model; the remote download may still be running. Check logs or retry later")
     results: list[dict[str, Any]] = []
     for svc in targets:
         url, token, _ = _resolve_service_endpoint(svc, args.url, args.api_token)
@@ -345,12 +345,12 @@ def _cmd_preload(args: argparse.Namespace) -> None:
         validate_duration(args.keep_alive, "--keep-alive")
     url, token, _ = _resolve_service_endpoint(url_override=args.url, token_override=args.api_token)
     headers = _auth_headers(token)
-    deadline = Deadline(args.timeout, "预加载模型超时")
+    deadline = Deadline(args.timeout, "Timed out preloading the model")
 
     if args.auto_pull:
         installed = _fetch_installed_model_names(url, token, timeout=deadline.remaining(30))
         if installed is not None and not _model_is_installed(spec, installed):
-            diagnostic(f"[{SERVICE.name}] 模型 {spec} 尚未下载，正在自动拉取 ...")
+            diagnostic(f"[{SERVICE.name}] Model {spec} is not downloaded yet; pulling it automatically ...")
             pull_model_stream(
                 url, spec, headers=headers, opener=safe_urlopen,
                 log_fn=lambda msg: diagnostic(f"[{SERVICE.name}] {msg}"),
@@ -392,7 +392,7 @@ def _cmd_cp(args: argparse.Namespace) -> None:
 def _cmd_rm(args: argparse.Namespace) -> None:
     models = [validate_model_spec(m) for raw in args.models for m in raw.split(",") if m.strip()]
     if not models:
-        raise UsageError("请至少指定一个要删除的模型名称")
+        raise UsageError("Specify at least one model name to delete")
     url, token, _ = _resolve_service_endpoint(url_override=args.url, token_override=args.api_token)
     deleted: list[str] = []
     for spec in models:
@@ -436,18 +436,18 @@ def _cmd_run(args: argparse.Namespace) -> None:
         if not sys.stdin.isatty():
             prompt = sys.stdin.read().strip()
         if not prompt:
-            raise UsageError("请提供提示词参数，或通过标准输入管道传入文本")
+            raise UsageError("Provide a prompt argument or pipe text through standard input")
 
     if args.keep_alive is not None:
         validate_duration(args.keep_alive, "--keep-alive")
 
     url, token, _ = _resolve_service_endpoint(url_override=args.url, token_override=args.api_token)
-    deadline = Deadline(args.timeout, "推理请求超时")
+    deadline = Deadline(args.timeout, "Inference request timed out")
 
     if args.auto_pull:
         installed = _fetch_installed_model_names(url, token, timeout=deadline.remaining(30))
         if installed is not None and not _model_is_installed(spec, installed):
-            diagnostic(f"[{SERVICE.name}] 模型 {spec} 尚未下载，正在自动拉取 ...")
+            diagnostic(f"[{SERVICE.name}] Model {spec} is not downloaded yet; pulling it automatically ...")
             pull_model_stream(
                 url, spec,
                 headers=_auth_headers(token),
@@ -755,7 +755,7 @@ def prepare_up(args: Any) -> None:
     storage = getattr(args, "models_storage", None)
     if storage:
         if storage not in MODELS_STORAGE_MODES:
-            raise ValueError(f"--models-storage 必须是 {', '.join(MODELS_STORAGE_MODES)} 之一")
+            raise ValueError(f"--models-storage must be one of {', '.join(MODELS_STORAGE_MODES)}")
         SERVICE.env["CT_OLLAMA_MODELS_STORAGE"] = storage
 
     ollama_ver = getattr(args, "ollama_version", None)

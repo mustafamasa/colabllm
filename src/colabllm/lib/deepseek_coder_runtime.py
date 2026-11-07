@@ -686,7 +686,7 @@ def patch_deepseek_chat_template(template: str) -> str:
 
     Stock template only accepts `"low"`, `"high"`, `"max"` or `1..100` (raising a Jinja exception when
     OpenAI SDKs / Coding Agents pass `"medium"`, `"minimal"`, or `"xhigh"`), and defaults to `"high"` (75)
-    instead of GSQ-RCO-Coder's calibrated `50`. Keeps `enable_thinking` and `｜DSML｜` structure intact so
+    instead of GSQ-RCO-Coder's calibrated `50`. Keeps `enable_thinking` and the full-width-bar `DSML` token structure intact so
     `llama-server`'s differential autoparser and DeepSeek V4.1 tool parser work identically.
     """
     patched = template.replace(

@@ -1,92 +1,92 @@
-# IndexTTS-2.5：克隆、情绪和语速控制
+# IndexTTS-2.5: cloning, emotion and speed control
 
-默认 **L4**，vLLM-Omni 两阶段语音合成，原生 Bearer 认证；支持参考音色、注册音色、多语言及情绪控制。
+Defaults to **L4**; two-stage vLLM-Omni speech synthesis with native Bearer authentication; supports reference voices, registered voices, multiple languages and emotion control.
 
-共享的安装前置、域名、认证、超时和停止行为见 [运行时通用操作](runtime-common.md)。以下命令均在本机执行。
+Shared prerequisites, domains, authentication, timeouts and stop behavior are in [Common runtime operations](runtime-common.md). All commands below run on the local machine.
 
-## 启动与基础合成
+## Startup and basic synthesis
 
 ```bash
 colabllm indextts up
 colabllm indextts status --json
 colabllm indextts voices --json
-colabllm indextts tts '你好，这是语音合成测试。' -o ./speech.wav
+colabllm indextts tts 'Hello, this is a speech synthesis test.' -o ./speech.wav
 colabllm indextts tts --text-file ./script.txt --voice default --lang zh -o ./narration.wav
 ```
 
-不传 `--voice/--ref-audio` 时使用服务默认音色 `default`。`--ref-audio` 优先于指定音色名。
-文本可用位置参数、`--text` 或 UTF-8 文本文件。长文本应控制长度和生成 token 上限。
+Without `--voice/--ref-audio` the service's default voice `default` is used. `--ref-audio` takes precedence over a voice name.
+Text can be given as a positional argument, with `--text` or as a UTF-8 text file. Keep long texts and the generated token limit under control.
 
-## 克隆与持久音色
+## Cloning and persistent voices
 
 ```bash
-colabllm indextts tts '用参考音色说这句话。' --ref-audio ./reference.wav -o ./clone.wav
-colabllm indextts tts '直接使用网盘参考音频。' --ref-audio 'drive://voices/ref.wav' -o ./drive-clone.wav
-colabllm indextts upload-voice --name narrator --audio ./reference.wav --description '获准使用的旁白参考'
+colabllm indextts tts 'Say this sentence in the reference voice.' --ref-audio ./reference.wav -o ./clone.wav
+colabllm indextts tts 'Use the reference audio on Drive directly.' --ref-audio 'drive://voices/ref.wav' -o ./drive-clone.wav
+colabllm indextts upload-voice --name narrator --audio ./reference.wav --description 'Narrator reference with permission to use'
 colabllm indextts upload-voice --name drivevoice --drive 'drive://voices/ref.wav'
 colabllm indextts voices --json
-colabllm indextts tts '继续生成旁白。' --voice narrator -o ./registered.wav
+colabllm indextts tts 'Continue the narration.' --voice narrator -o ./registered.wav
 colabllm indextts ls-drive 'voices' --json
 ```
 
-注册前检查名称，删除使用 `delete-voice NAME`。本机参考音频会上传；Drive 输入由远端读取。
-参考音频可用服务支持的 URL，或通过 `--ref-drive` 强制作为 Drive 路径解释。
-音色注册、删除是持久变更，不是临时生成参数。
+Check the name before registering; delete with `delete-voice NAME`. Local reference audio is uploaded; Drive inputs are read remotely.
+Reference audio can be a URL supported by the service, or forced to be interpreted as a Drive path with `--ref-drive`.
+Registering and deleting voices are persistent changes, not temporary generation parameters.
 
-## 情绪、语言与速度
+## Emotion, language and speed
 
 ```bash
-colabllm indextts tts '太让人惊喜了！' --voice narrator --emo-preset happy --emo-alpha 0.8 -o ./happy.wav
-colabllm indextts tts '故事即将开始。' --voice narrator --emo-text '温和且略带期待' -o ./emotion.wav
-colabllm indextts tts '请慢慢听我说。' --voice narrator --speed 0.8 --lang zh -o ./slow.wav
+colabllm indextts tts 'What a wonderful surprise!' --voice narrator --emo-preset happy --emo-alpha 0.8 -o ./happy.wav
+colabllm indextts tts 'The story is about to begin.' --voice narrator --emo-text 'gentle and slightly expectant' -o ./emotion.wav
+colabllm indextts tts 'Please listen to me slowly.' --voice narrator --speed 0.8 --lang en -o ./slow.wav
 ```
 
-速度原生范围 0.5–2.0；语言为 `zh/en/zhen/ja/es/ar/yue`，省略时 CLI 根据中英文字符自动选择。
-`--emo-preset` 有 happy、angry、sad、afraid、disgusted、melancholic、surprised、calm。
-`--emo-vector` 顺序为上述八维，`--emo-alpha` 控制融合（0–1）；提供情绪但不指定融合时默认 0.6。
-可用 `--emo-audio` / `--emo-audio-drive` 指定情绪参考。建议一次选择一种主要情绪来源，避免混合参数的优先级不清。
-`--no-text-norm` 关闭文本归一化，`--use-random` 开启随机采样，`--seed` 可用于复现实验。
+The native speed range is 0.5-2.0; languages are `zh/en/zhen/ja/es/ar/yue`, and when omitted the CLI picks one automatically from the Chinese/Latin characters in the text.
+`--emo-preset` accepts happy, angry, sad, afraid, disgusted, melancholic, surprised and calm.
+`--emo-vector` uses the eight dimensions above in that order, and `--emo-alpha` controls blending (0-1); when an emotion is given without a blend value the default is 0.6.
+`--emo-audio` / `--emo-audio-drive` set an emotion reference. Pick one main emotion source at a time to avoid unclear precedence between mixed parameters.
+`--no-text-norm` disables text normalization, `--use-random` enables random sampling, and `--seed` helps reproduce experiments.
 
-## 输出、认证及启动配置
+## Output, authentication and startup configuration
 
-`-o` 是本机文件；缺省输出为当前目录带时间戳的 WAV。`--format` 支持 WAV、MP3、FLAC、Opus、PCM，
-注意文件扩展名要与格式一致。`--save-drive` 另存服务端输出，返回路径优先于旧版帮助中的目录示例。
-当前 notebook 使用 `MyDrive/colab-llm/indextts/` 持久保存音色/输出；权重在 SSD，编译缓存按 GPU 和环境归档到 Drive。
-`--timeout` 默认 300 秒，是 HTTP 请求限时；TTS 不返回 OCR/Avatar 那样的持久 job ID。
+`-o` is a local file; the default output is a timestamped WAV in the current directory. `--format` supports WAV, MP3, FLAC, Opus and PCM;
+make sure the file extension matches the format. `--save-drive` also saves the server-side output; the returned path takes precedence over directory examples in older help text.
+The current notebook persists voices/outputs in `MyDrive/colab-llm/indextts/`; weights live on the SSD and build caches are archived to Drive per GPU and environment.
+`--timeout` defaults to 300 seconds and is an HTTP request limit; TTS does not return persistent job IDs like OCR/Avatar.
 
-通过 `--url` / `INDEXTTS_URL` 选择服务，`--api-token` / `INDEXTTS_API_TOKEN` 提供显式凭据。
-API 主要为 `POST /v1/audio/speech`、`GET /v1/audio/voices` 及注册/删除音色接口。
-`up --model/--alias/--stage0-gpu-mem/--stage1-gpu-mem/--max-model-len/--max-seqs` 是下一次启动配置。
-先看 `up --help`，不要把它们误用为运行中模型的重配置。
+Select the service with `--url` / `INDEXTTS_URL` and pass explicit credentials with `--api-token` / `INDEXTTS_API_TOKEN`.
+The main APIs are `POST /v1/audio/speech`, `GET /v1/audio/voices` and the voice register/delete endpoints.
+`up --model/--alias/--stage0-gpu-mem/--stage1-gpu-mem/--max-model-len/--max-seqs` configure the next start.
+Check `up --help` first, and do not mistake them for reconfiguring a running model.
 
 ```bash
 colabllm indextts up -i 2
-colabllm indextts tts '测试第二实例。' --voice default -i 2 -o ./instance2.wav
+colabllm indextts tts 'Testing the second instance.' --voice default -i 2 -o ./instance2.wav
 colabllm indextts logs -i 2 -n 100
 colabllm indextts down -i 2
 ```
 
-## 启动与编译缓存
+## Startup and build cache
 
-Setup 依次恢复缓存和已注册音色，再并行准备 Python 环境与模型。服务启动后加载两阶段模型并预热；JIT 缓存可命中时复用，否则按需生成。
+Setup restores the caches and registered voices first, then prepares the Python environment and model in parallel. After the service starts it loads the two-stage model and warms up; JIT caches are reused when they hit, otherwise generated on demand.
 
-编译缓存始终在本地 SSD 上运行，网盘只保存归档。以 L4 为例：
+Build caches always run on the local SSD; Drive only keeps the archives. For L4:
 
 ```text
-我的云端硬盘/colab-llm/indextts/
+MyDrive/colab-llm/indextts/
   cache-archives/vllm-0.32.0-py312-sm89/
     flashinfer-cache.tar
     triton-cache.tar
     vllm-cache.tar
 ```
 
-- 启动时每类缓存只从网盘读取一个 tar 文件，然后在本地解包，减少网盘逐文件操作。
-- 旧版 `flashinfer-cache/`、`triton-cache/`、`vllm-cache/` 首次仍需迁移，之后自动保存归档；第一次迁移仍可能较慢。旧目录保留供回退。
-- 每 10 秒输出恢复、迁移或保存进度；同一 VM 已恢复过的归档不重复读取，内容未变化时不重复上传。
-- 预热后在本地打包，再上传临时文件并替换正式归档；上传失败保留旧归档。缓存错误会警告，服务继续使用本地缓存或重新生成。
-- 不同 vLLM 版本和 GPU 架构使用不同目录。相同架构的并发实例最后成功保存的归档生效；缺少的条目可重新编译。
-- 已注册音色和生成音频继续作为普通网盘文件保存，不放入编译缓存归档。
+- At startup each cache type reads a single tar file from Drive and unpacks it locally, reducing per-file Drive operations.
+- Legacy `flashinfer-cache/`, `triton-cache/` and `vllm-cache/` still need a one-time migration, after which archives are saved automatically; the first migration may still be slow. The old directories are kept for fallback.
+- Restore, migration and save progress is printed every 10 seconds; archives already restored on the same VM are not read again, and unchanged content is not uploaded again.
+- After warm-up the cache is packed locally, uploaded as a temporary file and swapped in for the real archive; a failed upload keeps the old archive. Cache errors produce warnings and the service keeps using the local cache or regenerates it.
+- Different vLLM versions and GPU architectures use different directories. For concurrent instances on the same architecture, the last successfully saved archive wins; missing entries can be recompiled.
+- Registered voices and generated audio stay ordinary Drive files and are not put into the build cache archives.
 
-归档优化只减少编译缓存恢复/保存的耗时，不消除新 VM 的依赖安装、模型下载、模型加载以及必要的编译预热。当前运行中的旧版 notebook 不会热替换；新版恢复逻辑在下次 `up` 时生效。
+Archiving only shortens build cache restore/save time; it does not remove dependency installation, model download, model loading or the necessary compile warm-up on a new VM. A running older notebook is not hot-swapped; the new restore logic takes effect on the next `up`.
 
-验证记录：在真实 L4 Colab 会话中，将 577 个 Triton 文件（约 54 MB 数据）保存为约 55 MB tar，随后从网盘读取到独立本地目录并逐文件校验 SHA-256，全部一致。此次读取、解包和校验约 0.65 秒；测试发生在同一会话、归档刚写入之后，属于热缓存验证，不代表新 VM 的冷启动耗时。FlashInfer 和 vLLM 归档也已保存。
+Verification record: in a real L4 Colab session, 577 Triton files (about 54 MB of data) were saved as a ~55 MB tar, then read back from Drive into a separate local directory and checked file by file with SHA-256; all matched. Reading, unpacking and checking took about 0.65 s; the test ran in the same session right after the archive was written, so it is a warm-cache check and does not represent cold-start time on a new VM. The FlashInfer and vLLM archives were saved as well.

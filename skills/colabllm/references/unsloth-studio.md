@@ -1,12 +1,12 @@
 <!-- Generated from docs/unsloth-studio.md; edit the source and run tools/sync_runtime_docs.py. -->
 
-# Unsloth Studio：训练、推理与模型导出
+# Unsloth Studio: training, inference and model export
 
-默认 **L4**，使用 Unsloth Studio 自带登录，监听 Colab 内部端口 8888，通过选定隧道发布网页。
+Defaults to **L4**; uses Unsloth Studio's own login, listens on internal Colab port 8888 and publishes the web UI through the selected tunnel.
 
-共享的安装前置、域名、认证、超时和停止行为见 [运行时通用操作](runtime-common.md)。以下命令均在本机执行。
+Shared prerequisites, domains, authentication, timeouts and stop behavior are in [Common runtime operations](runtime-common.md). All commands below run on the local machine.
 
-## 启动和账号
+## Startup and account
 
 ```bash
 colabllm unsloth-studio up
@@ -16,30 +16,30 @@ colabllm unsloth-studio info --show-secrets
 colabllm unsloth-studio logs -n 100
 ```
 
-从返回的 URL 打开 Studio，使用实际 `login_user/login_pass`（若应用已报告）或其 UI 登录流程。
-不要把其他 Caddy 服务的账号字段或随机 `api_token` 当成 Studio 必定接受的 API Key。
-当前 notebook 启动 Studio 后才可能产生应用凭据，启动标记与登录字段的出现时间不同；界面不可用时继续查日志。
+Open Studio from the returned URL and use the actual `login_user/login_pass` (if the app reported them) or its UI login flow.
+Do not assume the account fields of other Caddy services or the random `api_token` are API keys that Studio will accept.
+The current notebook may only produce app credentials after Studio starts, and the start marker and login fields appear at different times; if the UI is unavailable, keep checking the logs.
 
-## 微调流程
+## Fine-tuning workflow
 
-1. 在界面选择基础模型与训练任务；受限模型需要有权限的 Hugging Face 账号。
-2. 导入数据集并核对列映射、聊天模板、训练/验证拆分和少量样本，避免错误格式进入长训练。
-3. 设置 LoRA/QLoRA、序列长度、批大小、梯度累积和输出位置；内存需求由模型及设置决定，L4 不适合所有模型。
-4. 先小步训练验证 loss、显存及输出，再按用户要求运行完整训练。
-5. 保存 checkpoint、adapter 和配置，确认写入持久目录；需要合并或量化时在 UI 明确选择导出格式。
+1. Choose the base model and training task in the UI; gated models need a Hugging Face account with access.
+2. Import the dataset and check the column mapping, chat template, train/validation split and a few samples, so a wrong format does not go into a long training run.
+3. Set LoRA/QLoRA, sequence length, batch size, gradient accumulation and output location; memory needs depend on the model and settings, and L4 does not suit every model.
+4. Validate loss, VRAM and output with a short training run first, then run the full training as the user asked.
+5. Save checkpoints, adapters and configuration and confirm they were written to a persistent directory; choose the export format explicitly in the UI when merging or quantizing.
 
-受限仓库的 Token 可通过已设置的 `HF_TOKEN` 由启动器读取；避免把实际 Token 写进命令历史或文档。
-安装/下载失败时先确认权限、网络和剩余磁盘，不反复新建 VM。
+Tokens for gated repositories can be read by the launcher from a configured `HF_TOKEN`; avoid writing the actual token into command history or documents.
+When installs/downloads fail, check permissions, network and free disk first instead of creating new VMs repeatedly.
 
-## 推理与导出
+## Inference and export
 
-Studio 的推理和训练工作流在 Web UI 中操作。若其版本公开可自动化接口，先读取实际接口说明；
-项目没有 `colabllm unsloth-studio train/chat/export` 子命令。
-推理模型、adapter 和 tokenizer 要与训练配置匹配，不能把仅 LoRA adapter 当作完整基础模型。
-导出到 `MyDrive/colab-llm/unsloth-studio/` 下的用户目录，并记录基础模型版本、adapter、tokenizer 和训练配置。
-默认工作目录或 UI 临时下载不保证持久，停止前确认 Drive 上实际存在所需文件，必要时下载本机副本。
+Studio's inference and training workflows are operated in the web UI. If its version exposes automatable APIs, read the actual API documentation first;
+the project has no `colabllm unsloth-studio train/chat/export` subcommands.
+The inference model, adapter and tokenizer must match the training configuration; a LoRA adapter alone cannot be used as a full base model.
+Export to a user directory under `MyDrive/colab-llm/unsloth-studio/` and record the base model version, adapter, tokenizer and training configuration.
+The default working directory or temporary UI downloads are not guaranteed to persist; before stopping, confirm the needed files actually exist on Drive, and download local copies when necessary.
 
-## 实例、较大 GPU 与停止
+## Instances, larger GPUs and stopping
 
 ```bash
 colabllm unsloth-studio up -i 2 --gpu A100
@@ -49,7 +49,7 @@ colabllm unsloth-studio logs -i 2 -f
 colabllm unsloth-studio down -i 2
 ```
 
-GPU 覆盖须匹配用户额度和模型需求。不同 VM 独立运行，但可能共享同一个 Drive 服务目录，
-不同实验应设置不同输出子目录，防止覆盖 checkpoint。
-本机 runner 和 VM 都需存活到训练/导出结束；关闭网页不代表训练取消。`down` 会释放 VM，
-恢复能力取决于实际保存的 checkpoint 及 UI 支持，不能承诺训练自动续跑。
+GPU overrides must match the user's quota and the model's needs. Separate VMs run independently but may share the same Drive service directory,
+so give different experiments different output subdirectories to avoid overwriting checkpoints.
+The local runner and the VM must both stay alive until training/export finishes; closing the web page does not cancel training. `down` releases the VM,
+and recoverability depends on the checkpoints actually saved and what the UI supports; automatic training resumption cannot be promised.

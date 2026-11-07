@@ -18,7 +18,7 @@ import colabsvc as svc
 
 class CliRegressionTest(unittest.TestCase):
     def test_invalid_instance_never_falls_back_to_default(self):
-        for value in ('中文', '', 'a/b', '?', '-bad'):
+        for value in ('çalışma', '', 'a/b', '?', '-bad'):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 svc.extract_instance_arg(['down', '--instance=' + value])
         with self.assertRaises(ValueError):
@@ -73,7 +73,7 @@ class CliRegressionTest(unittest.TestCase):
             executable = root / 'colab'
             executable.write_text('#!/bin/sh\ntouch "' + str(marker) + '"\n')
             executable.chmod(0o755)
-            result = subprocess.run([str(ROOT/'colabllm'), 'ollama', 'down', '-i', '中文'],
+            result = subprocess.run([str(ROOT/'colabllm'), 'ollama', 'down', '-i', 'çalışma'],
                 env={**os.environ, 'COLABLLM_HOME': str(root/'profile'),
                      'PATH': str(root) + os.pathsep + os.environ.get('PATH', '')},
                 text=True, capture_output=True)
@@ -100,7 +100,7 @@ class CliRegressionTest(unittest.TestCase):
         }), contextlib.redirect_stdout(output), contextlib.redirect_stderr(diagnostics):
             module['_cmd_transcribe'](['--json'])
         self.assertEqual(json.loads(output.getvalue())['text'], 'hello')
-        self.assertIn('准备执行', diagnostics.getvalue())
+        self.assertIn('Preparing', diagnostics.getvalue())
         self.assertNotIn('\x1b', diagnostics.getvalue())
 
     def test_debug_enables_traceback_and_quiet_does_not_hide_errors(self):

@@ -32,10 +32,10 @@ PARAMETERS = {
 
 def validate_parameters(value):
     if not isinstance(value, dict):
-        raise ValueError('inference_params 必须是 JSON 对象')
+        raise ValueError('inference_params must be a JSON object')
     for name, item in value.items():
         if name not in PARAMETERS:
-            raise ValueError(f'不支持的推理参数: {name}；可用: {", ".join(PARAMETERS)}')
+            raise ValueError(f'Unsupported inference parameter: {name}; available: {", ".join(PARAMETERS)}')
         kind, minimum, nullable = PARAMETERS[name]
         if item is None and nullable:
             continue
@@ -43,9 +43,9 @@ def validate_parameters(value):
         if kind is float:
             valid = type(item) in (int, float) and math.isfinite(item)
         if not valid or (minimum is not None and item < minimum):
-            raise ValueError(f'{name}: 类型必须是 {kind.__name__}' + (f'，值 >= {minimum}' if minimum is not None else ''))
+            raise ValueError(f'{name}: type must be {kind.__name__}' + (f', value >= {minimum}' if minimum is not None else ''))
         if kind is list and any(type(n) is not int or n < 0 for n in item):
-            raise ValueError(f'{name} 必须是非负整数数组或 null')
+            raise ValueError(f'{name} must be an array of non-negative integers or null')
     return dict(value)
 
 
@@ -59,10 +59,10 @@ def inference_kwargs(params, page_count, tokens_per_page):
 
 
 def add_inference_arguments(parser):
-    parser.add_argument('--params-file', help='本地 JSON 推理参数文件（使用官方参数名）')
-    parser.add_argument('--params-json', help='JSON 推理参数对象，覆盖参数文件')
+    parser.add_argument('--params-file', help='local JSON file with inference parameters (official parameter names)')
+    parser.add_argument('--params-json', help='JSON object with inference parameters; overrides the parameter file')
     parser.add_argument('--param', action='append', default=[], metavar='KEY=JSON',
-                        help='可重复；覆盖 JSON 配置，如 --param crop_mode=null')
+                        help='repeatable; overrides the JSON configuration, e.g. --param crop_mode=null')
     for name, (kind, _, _) in PARAMETERS.items():
         flag = '--' + name.replace('_', '-')
         if kind is bool:
@@ -85,6 +85,6 @@ def cli_parameters(args):
     for setting in args.param:
         name, separator, raw = setting.partition('=')
         if not separator:
-            raise ValueError('--param 格式必须为 KEY=JSON')
+            raise ValueError('--param must have the form KEY=JSON')
         result[name] = json.loads(raw)
     return validate_parameters(result)

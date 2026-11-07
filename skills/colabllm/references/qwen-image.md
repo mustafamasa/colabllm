@@ -1,65 +1,65 @@
 <!-- Generated from docs/qwen-image.md; edit the source and run tools/sync_runtime_docs.py. -->
 
-# Qwen-Image-2.1：统一文生图、1–4 图 `<imageN>` 编辑、原生 RGBA 透明通道与 Google Drive 直连
+# Qwen-Image-2.1: unified text to image, 1-4 image `<imageN>` editing, native RGBA transparency and direct Google Drive access
 
-默认 **G4**（RTX PRO 6000 Blackwell，96 GB VRAM），兼容 **H100**（80 GB HBM3）与 **A100**（40 GB / 80 GB）；基于 [vLLM-Omni 官方 Qwen-Image-2.1 Recipe](https://recipes.vllm.ai/Qwen/Qwen-Image-2.1) 在线部署 `Qwen/Qwen-Image-2.1`（7.1B 单流块因果注意力 DiT + 跨步精确 Prefix KV Cache + Qwen3-VL-8B 多模态编码器 + 16x 四通道 RGBA VAE），原生 fail-closed Bearer 认证（含无状态 CORS `OPTIONS` 预检）；支持中英双语文生图、1–4 张 `<image1>..<image4>` 序号绑定编辑、原生 RGBA 透明抠图/平铺导出、LoRA 适配器，以及直接读写挂载的 Google Drive 图片。
+Defaults to **G4** (RTX PRO 6000 Blackwell, 96 GB VRAM) and also supports **H100** (80 GB HBM3) and **A100** (40 GB / 80 GB). Deploys `Qwen/Qwen-Image-2.1` online following the [official vLLM-Omni Qwen-Image-2.1 recipe](https://recipes.vllm.ai/Qwen/Qwen-Image-2.1) (7.1B single-stream block-causal attention DiT + exact cross-step prefix KV cache + Qwen3-VL-8B multimodal encoder + 16x four-channel RGBA VAE), with native fail-closed Bearer authentication (including stateless CORS `OPTIONS` preflight); supports bilingual (Chinese/English) text to image, editing with 1-4 index-bound `<image1>..<image4>` references, native RGBA transparent cut-outs/flat-lay exports, LoRA adapters, and reading/writing images on the mounted Google Drive directly.
 
-共享的安装前置、域名、认证、超时和停止行为见 [运行时通用操作](runtime-common.md)。以下命令均在本机执行。
+Shared prerequisites, domains, authentication, timeouts and stop behavior are in [Common runtime operations](runtime-common.md). All commands below run on the local machine.
 
-## 前置条件
+## Prerequisites
 
-`Qwen/Qwen-Image-2.1` 采用 **Apache-2.0** 开源协议，在 Hugging Face 上**公开免门控**（无需同意许可协议即可下载；可选配置 `HF_TOKEN` 仅用于提升 Hugging Face Hub 下载速率限额）。
+`Qwen/Qwen-Image-2.1` is released under the **Apache-2.0** license and is **public and ungated** on Hugging Face (it downloads without accepting a license; an optional `HF_TOKEN` only raises Hugging Face Hub download rate limits).
 
-## G4、H100、A100 硬件选型与启动调用详解
+## Choosing G4, H100 or A100, with startup and usage details
 
-模型磁盘权重共 **33.1 GB**（`Qwen3-VL-8B` 文本/视觉编码器 17.5 GB BF16 + `QwenImage21Transformer2DModel` 7.1B DiT 14.2 GB BF16 + 四通道 RGBA VAE 1.4 GB FP32），在开启默认 `--vae-use-tiling` 时 `1024x1024` 40 步 BF16 峰值显存约为 **34–40 GB**：
+The model weights total **33.1 GB** on disk (`Qwen3-VL-8B` text/vision encoder 17.5 GB BF16 + `QwenImage21Transformer2DModel` 7.1B DiT 14.2 GB BF16 + four-channel RGBA VAE 1.4 GB FP32); with the default `--vae-use-tiling`, the BF16 peak VRAM for `1024x1024` at 40 steps is about **34-40 GB**:
 
-| Colab GPU | 架构与显存 | 推荐量化参数 (`--quantization`) | 峰值显存（1024²） | 适用场景与特点 |
+| Colab GPU | Architecture and VRAM | Recommended quantization (`--quantization`) | Peak VRAM (1024²) | Use case and notes |
 | --- | --- | --- | --- | --- |
-| **G4（默认）** | Blackwell `SM120` · **96 GB GDDR7** | `none`（默认满血 BF16） | ~35–40 GB（余量 >55 GB） | **日常主力挂机首选**：Colab 大显存档每小时计算单元单价更具性价比；满血 BF16 + 4 张高分参考图 + `--step-execution` 批量并发毫无显存压力 |
-| **H100** | Hopper `SM90` · **80 GB HBM3** | `none`（默认满血 BF16） | ~35–40 GB（余量 ~40 GB） | **极致低延迟档**：3.35 TB/s HBM3 高带宽 + CUDA Graphs，单张 40 步 `1024x1024` 延迟最低 |
-| **A100** | Ampere `SM80` · **40 GB / 80 GB** | `fp8-all`（40 GB 必选）或 `none`（80 GB） | ~28 GB（`fp8-all`） | **40 GB 兼容档**：同时对 Qwen3-VL-8B 与 DiT 非敏感层启用在线 FP8，显存降至约 28 GB |
-| **L4（不支持）** | Ada `SM89` · **24 GB GDDR6** | — | 超出 24 GB 物理上限 | 33.1 GB 权重（最低在线 FP8 亦需 ~28 GB）无法常驻 24 GB 显存；24 GB 轻量场景请使用 [FLUX 3 Image Klein](flux-klein.md) `--gpu L4 --variant fp8r` |
+| **G4 (default)** | Blackwell `SM120` · **96 GB GDDR7** | `none` (default full BF16) | ~35-40 GB (>55 GB headroom) | **First choice for everyday long-running use**: Colab's large-VRAM tier gives better compute-unit value per hour; full BF16 + 4 high-resolution reference images + `--step-execution` batch concurrency with no VRAM pressure |
+| **H100** | Hopper `SM90` · **80 GB HBM3** | `none` (default full BF16) | ~35-40 GB (~40 GB headroom) | **Lowest-latency tier**: 3.35 TB/s HBM3 bandwidth + CUDA Graphs give the lowest latency for a single 40-step `1024x1024` image |
+| **A100** | Ampere `SM80` · **40 GB / 80 GB** | `fp8-all` (required for 40 GB) or `none` (80 GB) | ~28 GB (`fp8-all`) | **40 GB compatibility tier**: online FP8 for both Qwen3-VL-8B and the DiT's non-sensitive layers brings VRAM down to about 28 GB |
+| **L4 (not supported)** | Ada `SM89` · **24 GB GDDR6** | - | Exceeds the 24 GB physical limit | 33.1 GB of weights (even the lowest online FP8 needs ~28 GB) cannot stay resident in 24 GB of VRAM; for light 24 GB use cases use [FLUX 3 Image Klein](flux-klein.md) with `--gpu L4 --variant fp8r` |
 
-### 1. G4 调用方式（默认推荐：96 GB 满血 BF16）
+### 1. Using G4 (default recommendation: 96 GB full BF16)
 
-不传 `--gpu` 即默认分配 **G4** 并启用 `--vae-use-tiling` 自适应分块解码防 OOM：
+Without `--gpu`, **G4** is allocated by default and `--vae-use-tiling` adaptive tiled decoding is enabled to prevent OOM:
 
 ```bash
-# 默认 G4 + 满血 BF16（临时隧道）
+# Default G4 + full BF16 (temporary tunnel)
 colabllm qwen-image up
 
-# G4 + 固定域名
+# G4 + fixed domain
 colabllm qwen-image up --domain
 
-# G4 + 固定域名 + 开启跨请求步级连续批处理（--step-execution，默认 max-num-seqs=8）
+# G4 + fixed domain + cross-request step-level continuous batching (--step-execution, default max-num-seqs=8)
 colabllm qwen-image up --domain --step-execution
 
-# G4 + 预加载 Google Drive 上的 LoRA 适配器
+# G4 + preload a LoRA adapter from Google Drive
 colabllm qwen-image up --domain --lora-path drive://loras/anime-style.safetensors --lora-scale 1.0
 ```
 
-### 2. H100 调用方式（80 GB HBM3 极速档）
+### 2. Using H100 (80 GB HBM3 fast tier)
 
 ```bash
-# H100 + 满血 BF16 + 固定域名
+# H100 + full BF16 + fixed domain
 colabllm qwen-image up --gpu H100 --domain
 
-# H100 + 步级连续批处理 + 自定义最大并发序列数
+# H100 + step-level continuous batching + custom maximum concurrent sequences
 colabllm qwen-image up --gpu H100 --domain --step-execution --max-num-seqs 8
 ```
 
-### 3. A100 / 显存优化调用方式（在线 FP8 与 Prefix KV 量化）
+### 3. A100 / VRAM-optimized usage (online FP8 and prefix KV quantization)
 
 ```bash
-# A100 (40 GB / 80 GB) + 在线全组件 FP8（保留构图敏感层 img_mlp 为 BF16，峰值显存约 28 GB）
+# A100 (40 GB / 80 GB) + online FP8 for all components (keeps the composition-sensitive img_mlp layers in BF16, peak VRAM about 28 GB)
 colabllm qwen-image up --gpu A100 --domain --quantization fp8-all
 
-# 长提示词 / 4 参考图高并发下进一步将跨步 Prefix KV Cache 的 V 压缩为 FP8
+# For long prompts / 4 reference images at high concurrency, also compress V of the cross-step prefix KV cache to FP8
 colabllm qwen-image up --domain --quantization fp8-text --prefix-kv-dtype fp8_v
 ```
 
-### 状态与服务配置检查
+### Checking status and service configuration
 
 ```bash
 colabllm qwen-image status --json
@@ -67,90 +67,90 @@ colabllm qwen-image models
 colabllm qwen-image models --json
 ```
 
-> **采样默认参数（自动注入）**：
-> 上游 `vllm serve --omni` 通用默认值为 50 步、`true_cfg_scale=4.0`，而 `Qwen/Qwen-Image-2.1` 官方推荐 **40 步（`num_inference_steps=40`）且关闭无负向提示词时的多余 CFG（`true_cfg_scale=1.0`）**。本服务的中间件与 CLI 均已自动注入该最佳默认值：未传 `--negative-prompt` 时默认单路 `true_cfg_scale=1.0`（速度翻倍）；传入非空 `--negative-prompt` 时自动切换至 `true_cfg_scale=4.0` 启用 True CFG 双路引导。
+> **Default sampling parameters (injected automatically)**:
+> Upstream `vllm serve --omni` defaults to 50 steps and `true_cfg_scale=4.0`, while `Qwen/Qwen-Image-2.1` officially recommends **40 steps (`num_inference_steps=40`) and turning off redundant CFG when there is no negative prompt (`true_cfg_scale=1.0`)**. This service's middleware and CLI inject these defaults automatically: without `--negative-prompt` a single-path `true_cfg_scale=1.0` is used (twice as fast); with a non-empty `--negative-prompt` it switches to `true_cfg_scale=4.0` for true CFG two-path guidance.
 
-## 文生图（Text-to-Image）与保存到 Google Drive
+## Text to image and saving to Google Drive
 
-`Qwen-Image-2.1` 原生支持高质量**中文与英文**提示词及画面中英文字体排版渲染，分辨率自动按 `32` 像素网格对齐（默认 `1024x1024`）：
+`Qwen-Image-2.1` natively supports high-quality **Chinese and English** prompts and renders Chinese/English typography in the image; resolutions are aligned to a `32`-pixel grid automatically (default `1024x1024`):
 
 ```bash
-# 中文提示词生图并保存到本机
-colabllm qwen-image generate '清晨阳光洒在木质茶桌上的一只青瓷茶壶，热气袅袅，写实摄影质感' -o ./teapot.png
+# Generate from a prompt and save locally
+colabllm qwen-image generate 'A celadon teapot on a wooden tea table in morning sunlight, wisps of steam, photorealistic' -o ./teapot.png
 
-# 直接将生成结果写入挂载的 Google Drive（不回传大图字节流）
+# Write the result directly to the mounted Google Drive (no large image bytes sent back)
 colabllm qwen-image generate 'A retrofuturistic tram crossing a misty harbor bridge at dawn, crisp signage reading "HARBOR LINE 07"' --save-drive outputs/tram.png
 
-# 等价写法：-o 直接指定 drive:// 路径
-colabllm qwen-image generate '赛博朋克雨夜拉面馆招牌，霓虹灯清晰写着“深夜食堂”四个汉字' -o drive://outputs/ramen-sign.png
+# Equivalent: point -o at a drive:// path directly
+colabllm qwen-image generate 'Cyberpunk ramen shop sign on a rainy night, neon lights clearly spelling "MIDNIGHT DINER"' -o drive://outputs/ramen-sign.png
 
-# 启用反向提示词（自动激活 true_cfg_scale=4.0）并同时保存到 Google Drive 与本机
-colabllm qwen-image generate '精致的二次元少女角色立绘，柔和光影' \
+# Enable a negative prompt (activates true_cfg_scale=4.0 automatically) and save to both Google Drive and local
+colabllm qwen-image generate 'A detailed anime-style girl character illustration, soft lighting' \
   --size 1024x1536 \
-  --negative-prompt '模糊，低画质，多余手指，畸变' \
+  --negative-prompt 'blurry, low quality, extra fingers, distortion' \
   --save-drive outputs/anime-card.png \
   -o ./anime-card.png
 ```
 
-## 1–4 图 `<imageN>` 参考编辑、原生 RGBA 透明抠图与 Google Drive 直连
+## 1-4 image `<imageN>` reference editing, native RGBA transparent cut-outs and direct Google Drive access
 
-支持 **1–4 张**参考图按传入顺序自动绑定为 `<image1>`、`<image2>`、`<image3>`、`<image4>`（传入第 5 张会返回 HTTP 400），且内置 16x **四通道 RGBA VAE** 可直接保留或生成透明背景 Alpha 通道：
+Supports **1-4** reference images bound automatically, in the order given, to `<image1>`, `<image2>`, `<image3>` and `<image4>` (a 5th image returns HTTP 400), and the built-in 16x **four-channel RGBA VAE** can keep or generate a transparent alpha channel directly:
 
 ```bash
-# 查看云端硬盘上的输入图片、历史输出或 LoRA 权重
+# List input images, past outputs or LoRA weights on Drive
 colabllm qwen-image ls-drive
 colabllm qwen-image ls-drive 'MyDrive/photos/*.png'
 colabllm qwen-image ls-drive --outputs
 colabllm qwen-image ls-drive --loras
 
-# 多参考图姿势迁移与换装（支持直接写中文 + <image1>..<image3> 精准指代，零上传读取 Google Drive）
-colabllm qwen-image edit '让图1 <image1> 的人物摆出图2 <image2> 的动作并穿上图3 <image3> 的服装，严格保留图1的面部特征与发型，背景保持干净自然' \
+# Multi-reference pose transfer and outfit swap (precise <image1>..<image3> references, reading Google Drive with no uploads)
+colabllm qwen-image edit 'Make the person in image 1 <image1> strike the pose from image 2 <image2> and wear the outfit from image 3 <image3>; strictly keep the face and hairstyle from image 1, with a clean, natural background' \
   --drive-image inputs/person.jpg inputs/pose.jpg inputs/outfit.png \
   --size 1024x1536 \
   --save-drive outputs/pose-costume.png \
   -o ./pose-costume.png
 
-# 服装提取 / 透明背景素材生成（--rgba 保留 4 通道 RGBA PNG 透明背景）
-colabllm qwen-image edit '提取图1 <image1> 人物身穿的完整服装（上衣与下装），透明背景居中平铺展示，不要出现人物身体或衣架' \
+# Outfit extraction / transparent-background asset generation (--rgba keeps a 4-channel RGBA PNG with transparent background)
+colabllm qwen-image edit 'Extract the complete outfit (top and bottom) the person in image 1 <image1> is wearing, laid flat and centered on a transparent background, with no body or hanger visible' \
   --drive-image inputs/model-photo.jpg \
   --rgba \
   --save-drive outputs/extracted-garment-rgba.png \
   -o ./extracted-garment-rgba.png
 
-# 省略 --size 时（默认 auto），自动继承参考图宽高比（约 1024x1024 面积、32 像素对齐）
+# Without --size (default auto), the reference image aspect ratio is inherited (about 1024x1024 area, 32-pixel aligned)
 colabllm qwen-image edit 'Write the words "FRESH BASIL" on this ceramic plate in dark green hand-painted lettering' \
   --image drive://inputs/plate.png \
   --save-drive outputs/plate-basil.png
 ```
 
-## 对接前端工作台（如 `open-pose-costume`）与 OpenAI Images SDK
+## Connecting frontend workbenches (such as `open-pose-costume`) and the OpenAI Images SDK
 
-中间件已内置以下兼容特性，可直接作为 OpenAI Images API 兼容后端接入 Web 前端（如 `open-pose-costume`）或官方 `openai` SDK：
+The middleware has the following compatibility features built in, so it can serve as an OpenAI Images API-compatible backend for web frontends (such as `open-pose-costume`) or the official `openai` SDK:
 
-- **CORS 跨域预检**：对 `OPTIONS` 预检返回 `204` 与 `Access-Control-Allow-*` 响应头，浏览器端携带 `Authorization: Bearer <API_TOKEN>` 即可直连。
-- **模型别名自动映射**：请求中的 `"Qwen/Qwen-Image-2.1"`、`"qwen-image-2.1"`、`"qwen-image"` 以及 `"gpt-image-2"` / `"gpt-image-1.5"` / `"gpt-image-1"` 均自动映射至当前加载模型，不会触发 `Model mismatch`。
-- **双格式 `/v1/images/edits`**：上游 vLLM-Omni 原生 `/v1/images/edits` 仅接受 `multipart/form-data`（直接 POST JSON 会断开连接，且 `url` 表单字段有 1024 KB 限制）；本服务中间件同时接受 **`multipart/form-data` 与 `application/json`**，自动将文件流、`data:image/...` 与 `drive://...` 转为无大小限制的本地回环二进制文件上传，完整保留 4 通道 RGBA 透明度与 `size="auto"` 自适应尺寸。
+- **CORS preflight**: `OPTIONS` preflight returns `204` with `Access-Control-Allow-*` headers, so browsers can connect directly with `Authorization: Bearer <API_TOKEN>`.
+- **Automatic model alias mapping**: `"Qwen/Qwen-Image-2.1"`, `"qwen-image-2.1"`, `"qwen-image"` and `"gpt-image-2"` / `"gpt-image-1.5"` / `"gpt-image-1"` in requests all map to the loaded model and never trigger `Model mismatch`.
+- **Dual-format `/v1/images/edits`**: upstream vLLM-Omni's native `/v1/images/edits` only accepts `multipart/form-data` (posting JSON directly drops the connection, and the `url` form field has a 1024 KB limit); this service's middleware accepts both **`multipart/form-data` and `application/json`**, converting file streams, `data:image/...` and `drive://...` into unlimited-size local loopback binary uploads that fully keep 4-channel RGBA transparency and `size="auto"` adaptive sizing.
 
-## 完整 HTTP API 说明
+## Full HTTP API reference
 
-读取当前实例地址与 Bearer Token：
+Read the current instance address and Bearer token:
 
 ```bash
 colabllm qwen-image info --json --show-secrets
 ```
 
-除无状态 CORS `OPTIONS` 预检外，所有端点（含 `/health`、`/v1/*`、`/api/ct/*`）均强制校验 `Authorization: Bearer <API_TOKEN>`（或 `X-API-Key: <API_TOKEN>`）：
+Except for stateless CORS `OPTIONS` preflight, all endpoints (including `/health`, `/v1/*` and `/api/ct/*`) require `Authorization: Bearer <API_TOKEN>` (or `X-API-Key: <API_TOKEN>`):
 
-| 方法与路径 | 用途 | 核心参数与 Google Drive 扩展 |
+| Method and path | Purpose | Key parameters and Google Drive extensions |
 | --- | --- | --- |
-| `POST /v1/images/generations` | OpenAI 文生图（返回 4 通道 RGBA 或 RGB `b64_json`） | 默认 `num_inference_steps=40`、`true_cfg_scale=1.0`；支持 `"save_to_drive"`、`"drive_only"`、`"color_format"`、Drive `lora.path` |
-| `POST /v1/images/edits` | OpenAI 兼容 1–4 图编辑（同时支持 `multipart/form-data` 与 JSON） | 支持 `image` / `image[]` 文件上传、`drive://...`、`size="auto"`、`background="transparent"`、`"save_to_drive"` |
-| `POST /api/ct/edit` | 简洁 JSON 1–4 图编辑（返回 `{created, data: [{b64_json, ...}]}`） | `"images": ["drive://inputs/a.png", ...]` + `"save_to_drive": "outputs/b.png"` |
-| `POST /v1/chat/completions` | vLLM-Omni 多模态 `image_url` 编辑（1–4 张参考图） | `image_url.url` 可直接传 `drive://...`；支持 `extra_body` 与 `"save_to_drive"` |
-| `GET /api/ct/drive-list` | 列出网盘图片、输出或 LoRA（`?path=...&kind=images\|outputs\|loras`） | 严格限制在 `MyDrive` 与服务数据目录内 |
-| `GET /api/ct/info` / `GET /v1/models` | 查询当前模型、量化、步级批处理状态、默认采样参数与网盘路径 | 返回 `rgba_vae`、`max_reference_images`、`drive_inputs_dir`、`drive_outputs_dir` |
+| `POST /v1/images/generations` | OpenAI text to image (returns 4-channel RGBA or RGB `b64_json`) | Defaults `num_inference_steps=40`, `true_cfg_scale=1.0`; supports `"save_to_drive"`, `"drive_only"`, `"color_format"`, Drive `lora.path` |
+| `POST /v1/images/edits` | OpenAI-compatible 1-4 image editing (both `multipart/form-data` and JSON) | Supports `image` / `image[]` file uploads, `drive://...`, `size="auto"`, `background="transparent"`, `"save_to_drive"` |
+| `POST /api/ct/edit` | Simple JSON 1-4 image editing (returns `{created, data: [{b64_json, ...}]}`) | `"images": ["drive://inputs/a.png", ...]` + `"save_to_drive": "outputs/b.png"` |
+| `POST /v1/chat/completions` | vLLM-Omni multimodal `image_url` editing (1-4 reference images) | `image_url.url` accepts `drive://...` directly; supports `extra_body` and `"save_to_drive"` |
+| `GET /api/ct/drive-list` | Lists Drive images, outputs or LoRAs (`?path=...&kind=images\|outputs\|loras`) | Strictly limited to `MyDrive` and the service data directory |
+| `GET /api/ct/info` / `GET /v1/models` | Queries the current model, quantization, step-batching state, default sampling parameters and Drive paths | Returns `rgba_vae`, `max_reference_images`, `drive_inputs_dir`, `drive_outputs_dir` |
 
-Python 调用示例：
+Python example:
 
 ```python
 import base64
@@ -163,7 +163,7 @@ token = os.environ["QWEN_IMAGE_API_TOKEN"]
 
 payload = {
     "model": "Qwen/Qwen-Image-2.1",
-    "prompt": "让图1 <image1> 的人物摆出图2 <image2> 的姿势，保持人物面部与服装细节一致",
+    "prompt": "Make the person in image 1 <image1> strike the pose from image 2 <image2>, keeping the face and clothing details consistent",
     "images": ["drive://inputs/person.png", "drive://inputs/pose.png"],
     "size": "auto",
     "num_inference_steps": 40,
@@ -188,7 +188,7 @@ with open("pose-transfer.png", "wb") as f:
     f.write(base64.b64decode(result["data"][0]["b64_json"]))
 ```
 
-## 本地 SSD 权重与编译缓存归档
+## Local SSD weights and build cache archives
 
-- **本地 NVMe SSD 高速加载**：`Qwen/Qwen-Image-2.1`（约 33.1 GB）下载并缓存在 VM 本地 NVMe SSD（`/content/qwen-image/model/Qwen-Image-2.1`），禁用 Xet 临时块缓存膨胀并在下载后自动清理 `/root/.cache/huggingface`，确保 Colab 本地磁盘余量充裕。
-- **跨步精确 Prefix KV Cache 与按架构编译缓存归档**：提示词与最多 4 张参考图编码仅在首个去噪步计算一次并在后续 39 步精确复用；FlashInfer、Triton 与 vLLM/TorchInductor 编译缓存在预热生图后按 GPU 架构（如 `sm120`、`sm90`、`sm80`）分别打包归档至 `MyDrive/colab-llm/qwen-image/cache-archives/`。
+- **Fast loading from the local NVMe SSD**: `Qwen/Qwen-Image-2.1` (about 33.1 GB) is downloaded and cached on the VM's local NVMe SSD (`/content/qwen-image/model/Qwen-Image-2.1`); the Xet temporary chunk cache is disabled to avoid bloat and `/root/.cache/huggingface` is cleaned after the download, keeping plenty of local disk free on Colab.
+- **Exact cross-step prefix KV cache and per-architecture build cache archives**: the prompt and up to 4 reference images are encoded only once in the first denoising step and reused exactly for the following 39 steps; after a warm-up generation, the FlashInfer, Triton and vLLM/TorchInductor build caches are packed into separate archives per GPU architecture (e.g. `sm120`, `sm90`, `sm80`) under `MyDrive/colab-llm/qwen-image/cache-archives/`.

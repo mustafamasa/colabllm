@@ -1,12 +1,12 @@
 <!-- Generated from docs/qwen-flash.md; edit the source and run tools/sync_runtime_docs.py. -->
 
-# Qwen Flash：LLM 与视觉推理
+# Qwen Flash: LLM and vision inference
 
-默认 **G4**，使用 llama.cpp 原生 Bearer 认证；提供 OpenAI 兼容接口，支持文本和视觉输入。
+Defaults to **G4** and uses llama.cpp's native Bearer authentication; provides an OpenAI-compatible API with text and vision input.
 
-共享的安装前置、域名、认证、超时和停止行为见 [运行时通用操作](runtime-common.md)。以下命令均在本机执行。
+Shared prerequisites, domains, authentication, timeouts and stop behavior are in [Common runtime operations](runtime-common.md). All commands below run on the local machine.
 
-## 启动与凭据
+## Startup and credentials
 
 ```bash
 colabllm qwen-flash up --ready-timeout 3600
@@ -16,12 +16,12 @@ colabllm qwen-flash info --json --show-secrets
 colabllm qwen-flash logs -n 100
 ```
 
-API Base URL 为返回的 `url` 后加 `/v1`；不要把网页地址误当成模型 ID。
-`GET /v1/models` 返回实际 alias。`/health` 可以无需认证返回 200，校验 API Key 应使用 `/v1/models`：无密钥/错误密钥须失败。
+The API base URL is the returned `url` plus `/v1`; do not mistake the web address for a model ID.
+`GET /v1/models` returns the actual alias. `/health` may return 200 without authentication, so verify the API key with `/v1/models`: a missing/wrong key must fail.
 
-## 调用聊天 API
+## Calling the chat API
 
-下例使用 Python 标准库，不安装 OpenAI SDK，不显示密钥，并拒绝重定向：
+The example below uses only the Python standard library, installs no OpenAI SDK, never prints the key and refuses redirects:
 
 ```python
 import json
@@ -38,24 +38,24 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 opener = urllib.request.build_opener(NoRedirect())
 with opener.open(urllib.request.Request(base + "/v1/models", headers=headers), timeout=30) as response:
     model = json.load(response)["data"][0]["id"]
-payload = {"model": model, "messages": [{"role": "user", "content": "用一句话解释向量数据库。"}],
+payload = {"model": model, "messages": [{"role": "user", "content": "Explain vector databases in one sentence."}],
            "max_tokens": 256, "stream": False}
 with opener.open(urllib.request.Request(base + "/v1/chat/completions", headers=headers,
         data=json.dumps(payload).encode()), timeout=120) as response:
     print(json.load(response)["choices"][0]["message"]["content"])
 ```
 
-视觉输入将消息 `content` 改成内容块列表：
+For vision input, change the message `content` to a list of content blocks:
 
 ```json
-[{"type":"text","text":"描述图片"},{"type":"image_url","image_url":{"url":"data:image/png;base64,IMAGE_BASE64"}}]
+[{"type":"text","text":"Describe the image"},{"type":"image_url","image_url":{"url":"data:image/png;base64,IMAGE_BASE64"}}]
 ```
 
-图片使用服务支持的可访问 URL 或真实 base64 数据；本机文件路径不能直接传给远端模型。
-`IMAGE_BASE64` 为占位值。服务没有 `chat` CLI 子命令，请调用 API。
-流式调用使用 `stream: true` 并处理 SSE，不能把流式返回一次性当 JSON 解析。
+Use a reachable URL supported by the service or real base64 data for images; local file paths cannot be passed to the remote model directly.
+`IMAGE_BASE64` is a placeholder. The service has no `chat` CLI subcommand; call the API.
+For streaming, use `stream: true` and handle SSE; a streamed response cannot be parsed as one JSON document.
 
-## 多实例与存储
+## Multiple instances and storage
 
 ```bash
 colabllm qwen-flash up -i 2
@@ -64,11 +64,11 @@ colabllm qwen-flash ps --json
 colabllm qwen-flash down -i 2
 ```
 
-调用实例 2 时，示例 Python 的 `info` 参数同样加 `-i 2`。
-当前模型是 IQ3_S GGUF 与 BF16 视觉投影器，配置为约 800K 上下文、YaRN 和全 GPU offload。
-G4 上首次准备大模型及编译可能较久；内存/显存需求不适合随意改用 T4。
-模型暂存 `/content/qwen-flash/model`，llama.cpp 编译缓存保存在 Drive 运行时目录；停止 VM 会丢失本地 SSD 文件。
-API 不自动把聊天记录或响应存入 Drive，客户端需自行保存；服务的长上下文能力不代表单次请求应无上限生成。
+When calling instance 2, add `-i 2` to the `info` call in the Python example as well.
+The current model is an IQ3_S GGUF with a BF16 vision projector, configured for about 800K context, YaRN and full GPU offload.
+First-time preparation of the large model and compilation on G4 may take a while; its memory/VRAM needs make T4 unsuitable.
+The model is staged at `/content/qwen-flash/model` and the llama.cpp build cache is kept in the Drive runtime directory; stopping the VM loses the local SSD files.
+The API never stores chat history or responses on Drive automatically; clients must save them. The long-context capability does not mean a single request should generate without limit.
 
-更新指定 Key 时须同时更新私密状态和实际服务端认证；只编辑本机状态不会改变运行中 server。
-单纯换 Key 不必释放 GPU，但应先检查在途请求，再按服务重载方式操作并验证新旧 Key。
+To change to a specific key, update both the private state and the actual server authentication; editing local state alone does not change a running server.
+Changing only the key does not require releasing the GPU, but check in-flight requests first, then reload the service as appropriate and verify the new and old keys.

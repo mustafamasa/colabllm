@@ -107,10 +107,10 @@ def main():
                         '-ac', '1', '-ar', '16000', '-af', 'apad', '-t', str(seconds), str(target)], check=True)
         waveform, sr = sf.read(target, dtype='float32')
         if not np.isfinite(waveform).all() or np.max(np.abs(waveform)) < 1e-5:
-            raise ValueError('音频为空或静音，请上传清晰人声')
+            raise ValueError('Audio is empty or silent; upload clear speech')
         emb = pipe.get_audio_embedding(waveform, fps=25, device='cuda', sample_rate=sr, model_type='avatar-v1.5')
         if not torch.isfinite(emb).all():
-            raise ValueError('音频特征包含无效值')
+            raise ValueError('Audio features contain invalid values')
         return emb
 
     # Test the actual Whisper -> audio-conditioned DiT -> VAE path before readiness.
@@ -166,7 +166,7 @@ def main():
                     from diffusers.utils import load_video
                     previous=load_video(saved['full_video'])
                 for segment in range(next_segment,segments):
-                    update(completed_segments=segment,message=f'正在生成第 {segment+1}/{segments} 段')
+                    update(completed_segments=segment,message=f'Generating segment {segment+1}/{segments}')
                     audio_start=sum(parts[:segment])-13*segment
                     kwargs=dict(prompt=prompt,num_frames=parts[segment],num_inference_steps=sampling['steps'],
                                 text_guidance_scale=sampling['text_guidance_scale'],
@@ -174,7 +174,7 @@ def main():
                                 output_type='both',generator=generator,
                                 audio_emb=window_audio(emb,audio_start,parts[segment]))
                     if segment==0:
-                        if mode=='音频＋图片＋描述':
+                        if mode=='Audio + Image + Prompt':
                             output,latent=pipe.generate_ai2v(image=load_image(image),resolution=resolution,**kwargs)
                         else:
                             height,width=(480,832) if resolution=='480p' else (768,1280)
@@ -198,7 +198,7 @@ def main():
                     torch.save(dict(next_segment=segment+1,latent=latent.cpu(),ref_latent=ref_latent.cpu(),
                                     generator=generator.get_state(),full_video=str(full)),temporary)
                     temporary.replace(checkpoint)
-                    update(completed_segments=segment+1,message=f'已保存第 {segment+1}/{segments} 段检查点')
+                    update(completed_segments=segment+1,message=f'Saved checkpoint for segment {segment+1}/{segments}')
                     for old in folder.glob('full-*.mp4'):
                         if old!=full:old.unlink()
                 listing=temp/'clips.txt'
@@ -227,12 +227,12 @@ def main():
 
     def submit(audio,image,prompt,mode,resolution,frames,segments,seed,auto_duration=True,output_folder=None,
                sampling_mode='distilled',steps=None,text_guidance_scale=None,audio_guidance_scale=None):
-        if not audio or not prompt.strip():raise gr.Error('请上传音频并填写描述')
-        if mode not in ('音频＋图片＋描述','音频＋描述') or resolution not in ('480p','720p'):
-            raise gr.Error('生成模式或分辨率无效')
-        if mode=='音频＋图片＋描述' and not image:raise gr.Error('请上传参考图片')
+        if not audio or not prompt.strip():raise gr.Error('Upload audio and enter a prompt')
+        if mode not in ('Audio + Image + Prompt','Audio + Prompt') or resolution not in ('480p','720p'):
+            raise gr.Error('Invalid generation mode or resolution')
+        if mode=='Audio + Image + Prompt' and not image:raise gr.Error('Upload a reference image')
         frames,segments,seed=int(frames),int(segments),int(seed)
-        if not (17<=frames<=161 and frames%4==1 and 1<=segments<=20):raise gr.Error('手动时长参数无效')
+        if not (17<=frames<=161 and frames%4==1 and 1<=segments<=20):raise gr.Error('Invalid manual duration parameters')
         if seed<0:seed=int.from_bytes(os.urandom(4),'little')
         sampling=sampling_settings(sampling_mode,steps,text_guidance_scale,audio_guidance_scale)
         request=dict(**sampling,prompt=prompt,mode=mode,resolution=resolution,frames=frames,segments=segments,
@@ -241,13 +241,13 @@ def main():
             request['output_dir']=str(resolve_drive(output_folder,directory=True,create=True))
         try:job_id=jobs.submit(request,audio,image)
         except ValueError as error:raise gr.Error(str(error))
-        return job_id,'任务已提交，可关闭网页。任务编号：'+job_id
+        return job_id,'Job submitted; you can close this page. Job ID: '+job_id
 
     def output_path(state):
         path=Path(state['result']['path']).resolve()
         if not any(path.is_relative_to(root.resolve()) for root in (output_dir,DRIVE_ROOT)):
-            raise ValueError('输出路径不在允许的目录内')
-        if not path.is_file():raise ValueError('输出视频文件不存在')
+            raise ValueError('Output path is outside the allowed directories')
+        if not path.is_file():raise ValueError('Output video file does not exist')
         return path
 
     def display_path(state):
@@ -265,60 +265,60 @@ def main():
         return str(cache)
 
     def inspect_job(job_id):
-        if not job_id:return '尚未选择任务',gr.skip(),gr.skip(),gr.skip()
+        if not job_id:return 'No job selected yet',gr.skip(),gr.skip(),gr.skip()
         try:state=jobs.get(job_id)
-        except (ValueError,FileNotFoundError):return '未找到该任务',gr.skip(),gr.skip(),gr.skip()
+        except (ValueError,FileNotFoundError):return 'Job not found',gr.skip(),gr.skip(),gr.skip()
         if state['status']=='completed':
             result=state['result']
             try:
                 published=display_path(state)
             except (OSError,ValueError,KeyError) as error:
-                return f'输出文件不可用：{error}',gr.skip(),gr.skip(),result.get('metadata')
-            return '生成完成',published,published,result['metadata']
+                return f'Output file unavailable: {error}',gr.skip(),gr.skip(),result.get('metadata')
+            return 'Generation complete',published,published,result['metadata']
         progress=state.get('message',state['status'])
-        if state['status']=='failed':progress='任务失败：'+progress
+        if state['status']=='failed':progress='Job failed: '+progress
         return progress,gr.skip(),gr.skip(),state
 
     with gr.Blocks(title='LongCat Avatar 1.5') as demo:
-        gr.Markdown('# LongCat Avatar 1.5\n上传人声音频，让人物跟随音频说话或演唱。默认 8 步、25 fps，结果自动保存到 Google Drive。')
+        gr.Markdown('# LongCat Avatar 1.5\nUpload vocal audio and the person speaks or sings along with it. Defaults to 8 steps at 25 fps; results are saved to Google Drive automatically.')
         with gr.Row():
             with gr.Column():
-                audio = gr.Audio(type='filepath', sources=['upload'], label='人声音频（建议清晰干声）')
-                image = gr.Image(type='filepath', label='参考人物图片')
-                prompt = gr.Textbox(label='人物、场景与动作描述', lines=4, value=sample_prompt)
-                mode = gr.Dropdown(['音频＋图片＋描述', '音频＋描述'], value='音频＋图片＋描述', label='生成模式')
-                resolution = gr.Dropdown(['480p', '720p'], value='480p', label='分辨率')
-                auto_duration = gr.Checkbox(value=True, label='按音频完整时长生成（自动分段）')
-                duration_info = gr.Markdown('上传音频后显示完整时长与预计段数。')
-                with gr.Accordion('手动时长与随机种子', open=False):
-                    frames = gr.Slider(17, 161, value=93, step=4, label='手动模式：每段帧数', interactive=False)
-                    segments = gr.Slider(1, 20, value=1, step=1, label='手动模式：生成段数', interactive=False)
-                    seed = gr.Number(value=42, precision=0, label='随机种子（-1 为随机）')
-                with gr.Accordion('口型与采样设置', open=False):
-                    sampling_mode = gr.Dropdown(choices=[('快速 · 8 步蒸馏','distilled'),('标准 · 非蒸馏，可调 CFG','standard')],
-                                               value='distilled', label='采样模式')
-                    steps = gr.Slider(8,100,value=8,step=1,label='推理步数',interactive=False)
-                    text_cfg = gr.Slider(1,10,value=1,step=0.1,label='文本 CFG',interactive=False)
-                    audio_cfg = gr.Slider(1,10,value=1,step=0.1,label='音频 CFG',interactive=False)
-                    gr.Markdown('标准模式较慢。音频 CFG 控制音频引导，降低可能影响同步；它不是嘴部幅度的直接控制。')
-                button = gr.Button('提交生成任务', variant='primary')
+                audio = gr.Audio(type='filepath', sources=['upload'], label='Vocal audio (clean dry vocals recommended)')
+                image = gr.Image(type='filepath', label='Reference person image')
+                prompt = gr.Textbox(label='Person, scene and action description', lines=4, value=sample_prompt)
+                mode = gr.Dropdown(['Audio + Image + Prompt', 'Audio + Prompt'], value='Audio + Image + Prompt', label='Generation mode')
+                resolution = gr.Dropdown(['480p', '720p'], value='480p', label='Resolution')
+                auto_duration = gr.Checkbox(value=True, label='Generate for the full audio length (automatic segments)')
+                duration_info = gr.Markdown('Upload audio to see its full length and the estimated number of segments.')
+                with gr.Accordion('Manual duration and random seed', open=False):
+                    frames = gr.Slider(17, 161, value=93, step=4, label='Manual mode: frames per segment', interactive=False)
+                    segments = gr.Slider(1, 20, value=1, step=1, label='Manual mode: number of segments', interactive=False)
+                    seed = gr.Number(value=42, precision=0, label='Random seed (-1 for random)')
+                with gr.Accordion('Lip sync and sampling settings', open=False):
+                    sampling_mode = gr.Dropdown(choices=[('Fast - 8-step distilled','distilled'),('Standard - non-distilled, adjustable CFG','standard')],
+                                               value='distilled', label='Sampling mode')
+                    steps = gr.Slider(8,100,value=8,step=1,label='Inference steps',interactive=False)
+                    text_cfg = gr.Slider(1,10,value=1,step=0.1,label='Text CFG',interactive=False)
+                    audio_cfg = gr.Slider(1,10,value=1,step=0.1,label='Audio CFG',interactive=False)
+                    gr.Markdown('Standard mode is slower. Audio CFG controls audio guidance; lowering it may hurt sync. It does not directly control mouth amplitude.')
+                button = gr.Button('Submit generation job', variant='primary')
             with gr.Column():
-                job_id = gr.Textbox(label='任务编号（重新打开网页后可粘贴查询）')
-                history = gr.Dropdown(label='历史任务', choices=jobs.recent())
-                status = gr.Markdown('提交后由服务端后台生成，关闭网页不影响任务。')
-                video = gr.Video(label='生成结果')
-                download = gr.File(label='下载有声视频')
-                metadata = gr.JSON(label='生成信息')
-        gr.Examples([[str(sample_audio), str(sample_image), sample_prompt]], [audio, image, prompt], label='官方示例')
+                job_id = gr.Textbox(label='Job ID (paste it here after reopening the page)')
+                history = gr.Dropdown(label='Job history', choices=jobs.recent())
+                status = gr.Markdown('After submission the server generates in the background; closing the page does not affect the job.')
+                video = gr.Video(label='Result')
+                download = gr.File(label='Download video with audio')
+                metadata = gr.JSON(label='Generation info')
+        gr.Examples([[str(sample_audio), str(sample_image), sample_prompt]], [audio, image, prompt], label='Official example')
         def describe_duration(path, automatic):
             if not automatic:
-                return '手动模式将按设置的帧数与段数截取音频。'
+                return 'Manual mode trims the audio to the configured frames and segments.'
             if not path:
-                return '上传音频后显示完整时长与预计段数。'
+                return 'Upload audio to see its full length and the estimated number of segments.'
             try:
                 seconds = sf.info(path).duration
                 parts, _, _ = plan_segments(seconds)
-                return f'音频约 **{seconds:.2f} 秒**，将自动生成 **{len(parts)} 段**，输出覆盖完整音频。'
+                return f'Audio is about **{seconds:.2f} s**; **{len(parts)} segments** will be generated automatically, covering the full audio.'
             except Exception as error:
                 return str(error)
         audio.change(describe_duration, [audio,auto_duration], duration_info)
@@ -356,9 +356,9 @@ def main():
             audio=resolve_input(body.get('audio'))
             image=resolve_input(body['image']) if body.get('image') else None
             automatic=body.get('auto_duration',True)
-            if not isinstance(automatic,bool):raise ValueError('auto_duration 必须为布尔值')
+            if not isinstance(automatic,bool):raise ValueError('auto_duration must be a boolean')
             job_id,_=submit(str(audio),str(image) if image else None,str(body.get('prompt','')),
-                '音频＋图片＋描述' if image else '音频＋描述',body.get('resolution','480p'),
+                'Audio + Image + Prompt' if image else 'Audio + Prompt',body.get('resolution','480p'),
                 body.get('frames',93),body.get('segments',1),body.get('seed',42),automatic,body.get('output_dir'),
                 body.get('sampling_mode','distilled'),body.get('steps'),
                 body.get('text_guidance_scale'),body.get('audio_guidance_scale'))
@@ -373,12 +373,12 @@ def main():
     @api.get('/jobs/{job_id}')
     def get_job(job_id: str):
         try:return jobs.get(job_id)
-        except (ValueError,FileNotFoundError):raise HTTPException(404,'未找到任务')
+        except (ValueError,FileNotFoundError):raise HTTPException(404,'Job not found')
 
     @api.get('/jobs/{job_id}/video')
     def job_video(job_id: str):
         state=get_job(job_id)
-        if state['status']!='completed':raise HTTPException(409,'任务尚未完成')
+        if state['status']!='completed':raise HTTPException(409,'Job not finished yet')
         try:path=output_path(state)
         except ValueError as error:raise HTTPException(404,str(error))
         return FileResponse(path,media_type='video/mp4',filename=path.name)

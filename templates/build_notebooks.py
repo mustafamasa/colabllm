@@ -1109,7 +1109,7 @@ ct_public_gate(PUBLIC_URL, lambda: http_json(PUBLIC_URL + "/v1/models", API_TOKE
                lambda: auth_check(PUBLIC_URL, API_TOKEN), qlog, timeout=120, interval=10)
 code, resp = http_json(PUBLIC_URL + "/v1/chat/completions", API_TOKEN, {
     "model": CFG["alias"],
-    "messages": [{"role": "user", "content": "只输出四个字：部署成功"}],
+    "messages": [{"role": "user", "content": "Reply with exactly two words: deployment successful"}],
     "max_tokens": 64, "temperature": 0,
     "chat_template_kwargs": {"enable_thinking": False},
 }, timeout=180)
@@ -2568,7 +2568,7 @@ if http_json(f"http://127.0.0.1:{AUX_PORT}/health", timeout=10)[0] != 200:
     qlog("Auxiliary worker not healthy yet:\n" + ct_tail("aux", 20))
 
 # Warmup synthesis (payload matches the primary checkpoint task) to sync JIT caches to Drive
-_warm = {"model": MODEL_REPO, "input": "你好，Qwen3 TTS 语音合成服务已经准备就绪。",
+_warm = {"model": MODEL_REPO, "input": "Hello, the Qwen3 TTS speech synthesis service is ready.",
          "language": "Chinese", "response_format": "wav"}
 _low_repo = MODEL_REPO.lower()
 if "voicedesign" in _low_repo:

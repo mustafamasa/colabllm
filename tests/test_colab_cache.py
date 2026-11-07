@@ -31,14 +31,14 @@ class CacheTest(unittest.TestCase):
 
     def test_legacy_migration_then_archive_only_restore(self):
         nested=self.legacy/'.cache'/'kernel';nested.mkdir(parents=True)
-        (nested/'模块.cubin').write_bytes(b'compiled-kernel')
+        (nested/'modül.cubin').write_bytes(b'compiled-kernel')
         self.assertEqual(self.restore(),'legacy')
         self.assertTrue((self.archives/self.key/'triton-cache.tar').is_file())
         fresh=self.root/'fresh'/'triton-cache'
         with patch.object(cache.shutil,'copytree',side_effect=AssertionError('must not walk Drive')):
             result=cache.restore_cache(fresh,self.legacy,self.archives,self.key,self.logs.append)
         self.assertEqual(result,'archive')
-        self.assertEqual((fresh/'.cache/kernel/模块.cubin').read_bytes(),b'compiled-kernel')
+        self.assertEqual((fresh/'.cache/kernel/modül.cubin').read_bytes(),b'compiled-kernel')
         self.assertFalse(cache.save_cache(fresh,self.archives,self.key,self.logs.append))
         with patch.object(cache.shutil,'copyfile',side_effect=AssertionError('local cache should be reused')):
             self.assertEqual(cache.restore_cache(fresh,self.legacy,self.archives,self.key,self.logs.append),'local')
@@ -57,7 +57,7 @@ class CacheTest(unittest.TestCase):
         (folder/'triton-cache.tar').write_bytes(b'interrupted-data')
         (self.legacy/'kernel').write_bytes(b'legacy')
         self.assertEqual(self.restore(),'legacy')
-        self.assertTrue(any('归档不可用' in line for line in self.logs))
+        self.assertTrue(any('archive unavailable' in line for line in self.logs))
         with tarfile.open(folder/'triton-cache.tar') as tar:
             self.assertEqual(tar.extractfile('kernel').read(),b'legacy')
 

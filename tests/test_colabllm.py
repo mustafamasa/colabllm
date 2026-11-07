@@ -23,8 +23,8 @@ class UnifiedCliTest(unittest.TestCase):
                 execute.assert_called_once_with(sys.executable, [sys.executable, str(path), 'up', '-i', '2', '--domain', 'my.example.com'])
                 self.assertEqual(Path.cwd(), before)
         with patch.object(cli.os, 'execv') as execute:
-            cli.main(['unlimited-ocr', 'ocr', './本地目录/合同 1.pdf', '-O', './结果'])
-            self.assertEqual(execute.call_args.args[1][-4:], ['ocr', './本地目录/合同 1.pdf', '-O', './结果'])
+            cli.main(['unlimited-ocr', 'ocr', './yerel klasör/sözleşme 1.pdf', '-O', './sonuçlar'])
+            self.assertEqual(execute.call_args.args[1][-4:], ['ocr', './yerel klasör/sözleşme 1.pdf', '-O', './sonuçlar'])
 
     def test_global_configuration_dispatch(self):
         for name in cli.GLOBAL_COMMANDS:

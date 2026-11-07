@@ -18,9 +18,9 @@ Usage:
   colabllm indextts voices                          # list registered voices
   colabllm indextts upload-voice --name narrator --audio sample.wav
   colabllm indextts upload-voice --name narrator --drive voices/sample.wav
-  colabllm indextts tts "今天天气真好，我们一起去公园散步吧。" -o out.wav
+  colabllm indextts tts "The weather is lovely today, let's take a walk in the park." -o out.wav
   colabllm indextts tts "Hello, this is zero-shot voice cloning!" --ref-audio sample.wav -o clone.wav
-  colabllm indextts tts "太让人惊喜了！" --emo-preset happy --emo-alpha 0.8 -o happy.wav
+  colabllm indextts tts "What a wonderful surprise!" --emo-preset happy --emo-alpha 0.8 -o happy.wav
   colabllm indextts down
 """
 from __future__ import annotations

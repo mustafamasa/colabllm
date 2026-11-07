@@ -161,7 +161,7 @@ class LocalTransferTest(unittest.TestCase):
         import hashlib
         with tempfile.TemporaryDirectory() as d, patch.object(app, 'DRIVE', Path(d).resolve()), patch.object(app, 'DATA', Path(d).resolve() / 'svc'):
             content = b'pdf contents' * 100
-            body = dict(sha256=hashlib.sha256(content).hexdigest(), name='合同.pdf', offset=0,
+            body = dict(sha256=hashlib.sha256(content).hexdigest(), name='sözleşme.pdf', offset=0,
                         data=base64.b64encode(content[:100]).decode(), final=False)
             self.assertFalse(app.upload_chunk(body)['complete'])
             with self.assertRaises(ValueError):
@@ -174,9 +174,9 @@ class LocalTransferTest(unittest.TestCase):
                 app.upload_chunk(dict(body, sha256='0' * 64, final=True))
             engine = FakeEngine()
             jobs = app.Jobs(engine, Path(d) / 'svc')
-            job = jobs.submit(dict(inputs=[result['path']], output_dir='results', relative_outputs={result['path']: 'books/合同.pdf'}))
+            job = jobs.submit(dict(inputs=[result['path']], output_dir='results', relative_outputs={result['path']: 'books/sözleşme.pdf'}))
             jobs.queue.join()
-            self.assertEqual(jobs.get(job['id'])['files'][0]['relative_output'], 'books/合同.pdf')
+            self.assertEqual(jobs.get(job['id'])['files'][0]['relative_output'], 'books/sözleşme.pdf')
             self.assertIn('result.md', app.result_files(jobs, job['id'], 0)['files'])
             part = app.result_files(jobs, job['id'], 0, 'result.md')
             self.assertEqual(base64.b64decode(part['data']), b'converted')
