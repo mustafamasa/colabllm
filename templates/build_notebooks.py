@@ -700,372 +700,192 @@ from colab import start
 start(port=SERVICE_PORT, cloudflare=False)
 '''
 
-# --------------------------------------------------------------------------- qwen-flash (G4, llama.cpp sm_120, 800K + vision)
+# --------------------------------------------------------------------------- qwen-flash (G4, llama.cpp sm_120, UD-Q4_K_XL-V2, 1M YaRN 4x + q8_0 KV + vision)
 QWEN_FLASH_CFG = dict(name="qwen-flash", service_port=8000, auth="builtin", public_port=8000,
-                      health_path="/health", ready_timeout=2400)
+                      health_path="/health", ready_timeout=5400)
 
-QWEN_FLASH_SETUP = r'''# @title 1. Setup -- parallel llama.cpp sm_120 build/cache restore + 84 GB GGUF + BF16 mmproj staging
+QWEN_FLASH_SETUP = (
+    r'''# @title 1. Setup -- parallel llama.cpp b11540 sm_120 build/cache + 103.7 GiB UD-Q4_K_XL-V2 GGUF + BF16 mmproj + 1M G4 hardware plan
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import hashlib, platform, tarfile
 
-CFG = {
-    "repo": os.environ.get("CT_QWEN_REPO", "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF"),
-    "quant": os.environ.get("CT_QWEN_QUANT", "IQ3_S"),
-    "alias": os.environ.get("CT_QWEN_ALIAS", "qwen3.8-flash-next"),
-    "context": int(os.environ.get("CT_QWEN_CONTEXT", "819200")),
-    "rope_scaling": os.environ.get("CT_QWEN_ROPE_SCALING", "yarn"),
-    "rope_scale": float(os.environ.get("CT_QWEN_ROPE_SCALE", "3.125")),
-    "yarn_orig_ctx": int(os.environ.get("CT_QWEN_YARN_ORIG_CTX", "262144")),
-    "cache_type": os.environ.get("CT_QWEN_CACHE_TYPE", "f16"),
-    "batch": int(os.environ.get("CT_QWEN_BATCH", "512")),
-    "ubatch": int(os.environ.get("CT_QWEN_UBATCH", "128")),
-    "llama_repo": os.environ.get("CT_LLAMA_REPO", "https://github.com/ggml-org/llama.cpp.git"),
-    "llama_commit": os.environ.get("CT_LLAMA_COMMIT", "a0e6dc7384edb8f5d927155e1d26c10b4a310e6d"),
-    "service_dir": os.environ.get("CT_QWEN_SERVICE_DIR", "/content/drive/MyDrive/colab-services/qwen-flash"),
-    "model_root": os.environ.get("CT_QWEN_MODEL_ROOT", "/content/drive/MyDrive/models"),
-    "work_dir": os.environ.get("CT_QWEN_WORK_DIR", "/content/qwen-flash"),
-    "vision_projector": {
-        "name": "mmproj-Qwen3.8-Flash-Next-BF16.gguf",
-        "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
-        "size": 907542944,
-        "sha256": "2e788f8c511d8093c7b43cb87b2fd7e14228340318057f8fb20c86df2efe2355",
-    },
-}
+QWEN_WORK = Path(os.environ.get("CT_QWEN_WORK_DIR", "/content/qwen-flash"))
+QWEN_WORK.mkdir(parents=True, exist_ok=True)
+(QWEN_WORK / "qwen_flash_runtime.py").write_text('''
+    + repr((ROOT / "src/colabllm/lib/qwen_flash_runtime.py").read_text())
+    + r''', encoding="utf-8")
+if str(QWEN_WORK) not in sys.path:
+    sys.path.insert(0, str(QWEN_WORK))
 
-DEFAULT_MODEL_LOCK = {
-    "repo": "SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF",
-    "revision": "eec4e10a2c29b440a2ae85591fa11569ce752963",
-    "files": [
-        {
-            "name": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00001-of-00002.gguf",
-            "size": 55063448064,
-            "sha256": "40f369eca301ec6ea318dbb671b3132c26a2f0b89aa5458a7051b33215ee296c",
-        },
-        {
-            "name": "IQ3_S/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-IQ3_S-00002-of-00002.gguf",
-            "size": 28800138432,
-            "sha256": "316b46f3a2dbd68c900f43136ab9449f9dcc3725dfd8c794847c204bc161e113",
-        },
-    ],
-}
+from qwen_flash_runtime import (
+    DEFAULT_ALIAS,
+    DEFAULT_CONTEXT,
+    DEFAULT_LLAMA_COMMIT,
+    DEFAULT_LLAMA_REPO,
+    DEFAULT_QUANT,
+    DEFAULT_REPO,
+    MODEL_NUM_LAYERS,
+    build_server_args,
+    compute_yarn_params,
+    detect_gpu_info,
+    detect_host_ram_mib,
+    evict_gguf_page_cache,
+    looks_like_oom,
+    plan_hardware_config,
+    prepare_llama_runtime,
+    stage_model_and_projector,
+    write_json_atomic,
+)
 
 def qlog(msg):
-    print(time.strftime("[%F %T] ") + msg, flush=True)
-
-def write_json_atomic(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{SERVICE}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(value, indent=2) + "\n")
-    tmp.replace(path)
-
-def cmd_out(command, **kwargs):
-    return subprocess.check_output(command, text=True, stderr=subprocess.STDOUT, **kwargs).strip()
-
-def run_logged(command, filename, env=None):
-    with open(filename, "a") as handle:
-        res = subprocess.run(command, stdout=handle, stderr=subprocess.STDOUT, env=env)
-    if res.returncode:
-        raise RuntimeError(f"Command failed ({res.returncode}); see {filename}")
-
-def digest_file(path):
-    h = hashlib.sha256()
-    with open(path, "rb") as handle:
-        while chunk := handle.read(16 * 1024 * 1024):
-            h.update(chunk)
-    return h.hexdigest()
-
-def require_space(path, needed):
-    free = shutil.disk_usage(path).free
-    if free < needed:
-        raise RuntimeError(f"{path}: need {needed/1e9:.1f} GB, free {free/1e9:.1f} GB")
-
-def restore_valid_bin(bin_dir, env):
-    server = bin_dir / "llama-server"
-    if not server.is_file():
-        return False
-    try:
-        server.chmod(0o755)
-        cmd_out([str(server), "--version"], env=env)
-        devices = cmd_out([str(server), "--list-devices"], env=env)
-        return "CUDA" in devices and "RTX PRO 6000" in devices
-    except (OSError, subprocess.CalledProcessError):
-        return False
-
-def prepare_runtime(config, service, work):
-    commit_file = service / "llama-commit.txt"
-    if not commit_file.exists():
-        commit = config.get("llama_commit") or cmd_out(["git", "ls-remote", config["llama_repo"], "HEAD"]).split()[0]
-        commit_file.write_text(commit + "\n")
-    commit = commit_file.read_text().strip()
-    gpu = cmd_out(["nvidia-smi", "--query-gpu=name,compute_cap", "--format=csv,noheader"]).splitlines()[0]
-    if "RTX PRO 6000" not in gpu or "12.0" not in gpu:
-        raise RuntimeError("This deployment requires G4 / RTX PRO 6000 sm_120: " + gpu)
-    signature = {
-        "llama_commit": commit, "gpu": gpu, "cuda": cmd_out(["nvcc", "--version"]),
-        "os_release": Path("/etc/os-release").read_text(), "arch": platform.machine(),
-        "glibc": platform.libc_ver(), "cuda_arch": "120", "ggml_native": False,
-    }
-    key = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()[:20]
-    cache = Path(config["model_root"]) / ".runtimes" / "llama.cpp" / ("sm120-" + key)
-    cache.mkdir(parents=True, exist_ok=True)
-    bin_dir = work / "runtime" / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, LD_LIBRARY_PATH=str(bin_dir) + ":" + os.environ.get("LD_LIBRARY_PATH", ""))
-    local_manifest = work / "runtime-manifest.json"
-    if bin_dir.exists() and any(bin_dir.iterdir()) and (
-        not local_manifest.exists() or json.loads(local_manifest.read_text()) != json.loads(json.dumps(signature))
-    ):
-        shutil.rmtree(bin_dir)
-        bin_dir.mkdir()
-    archive = cache / "runtime.tar"
-    checksum = cache / "runtime.sha256"
-    if not restore_valid_bin(bin_dir, env) and archive.exists() and checksum.exists():
-        qlog("Restoring compatible build cache from Drive: " + str(cache))
-        local_tar = work / "runtime.tar"
-        shutil.copyfile(archive, local_tar)
-        if digest_file(local_tar) != checksum.read_text().strip():
-            raise RuntimeError("Build cache checksum mismatch; refusing corrupt archive")
-        with tarfile.open(local_tar) as bundle:
-            bundle.extractall(work / "runtime", filter="data")
-        local_tar.unlink()
-    if not restore_valid_bin(bin_dir, env):
-        qlog("Building pinned llama.cpp for CUDA sm_120; progress: " + str(work / "build.log"))
-        source = work / "llama.cpp"
-        if not (source / ".git").exists():
-            run_logged(["git", "clone", "--no-checkout", "--filter=blob:none", config["llama_repo"], str(source)], work / "build.log")
-        run_logged(["git", "-C", str(source), "fetch", "--depth", "1", "origin", commit], work / "build.log")
-        run_logged(["git", "-C", str(source), "checkout", "--detach", commit], work / "build.log")
-        run_logged(["cmake", "-S", str(source), "-B", str(source / "build"),
-                    "-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=120",
-                    "-DGGML_NATIVE=OFF", "-DCMAKE_BUILD_TYPE=Release",
-                    "-DLLAMA_CURL=OFF", "-DLLAMA_OPENSSL=OFF", "-DLLAMA_BUILD_TESTS=OFF"], work / "build.log")
-        run_logged(["cmake", "--build", str(source / "build"), "--config", "Release",
-                    "-j", str(min(12, os.cpu_count() or 4))], work / "build.log")
-        shutil.copytree(source / "build" / "bin", bin_dir, dirs_exist_ok=True, symlinks=False)
-        if not restore_valid_bin(bin_dir, env):
-            raise RuntimeError("Built runtime did not enumerate the G4 CUDA device")
-        local_tar = work / "runtime.tar"
-        with tarfile.open(local_tar, "w", dereference=True) as bundle:
-            bundle.add(bin_dir, arcname="bin")
-        checksum_value = digest_file(local_tar)
-        partial = cache / f"runtime.tar.{SERVICE}.{os.getpid()}.partial"
-        shutil.copyfile(local_tar, partial)
-        partial.replace(archive)
-        checksum.write_text(checksum_value + "\n")
-        write_json_atomic(cache / "manifest.json", signature)
-        local_tar.unlink()
-        qlog("Complete runtime cached on Drive: " + str(cache))
-    help_text = cmd_out([str(bin_dir / "llama-server"), "--help"], env=env)
-    for flag in ("--lazy-mode", "--load-mode", "--api-key-file"):
-        if flag not in help_text:
-            raise RuntimeError("Pinned llama.cpp lacks required option: " + flag)
-    write_json_atomic(local_manifest, signature)
-    return bin_dir, env
-
-def hf_download_client(work):
-    os.environ.setdefault("HF_XET_HIGH_PERFORMANCE", "1")
-    try:
-        import hf_xet
-        from huggingface_hub import HfApi, hf_hub_download
-    except ImportError:
-        run_logged([sys.executable, "-m", "pip", "install", "-U", "huggingface_hub", "hf_xet"], work / "download.log")
-        from huggingface_hub import HfApi, hf_hub_download
-    return HfApi, hf_hub_download
-
-def valid_shard(path, item):
-    return path.is_file() and path.stat().st_size == item["size"] and digest_file(path) == item["sha256"]
-
-def prepare_shard(item, config, revision, local_dir, download):
-    target = local_dir / item["name"]
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if download is not None:
-        try:
-            qlog("Downloading HF -> local SSD (resumable): " + item["name"])
-            downloaded = Path(download(repo_id=config["repo"], filename=item["name"],
-                                       revision=revision, local_dir=local_dir / ".hf-download"))
-            if not valid_shard(downloaded, item):
-                downloaded.unlink(missing_ok=True)
-                raise RuntimeError("HF shard size/SHA256 mismatch")
-            downloaded.replace(target)
-            qlog("SHA256 OK (HF): " + target.name)
-            return target
-        except Exception as error:
-            qlog(f"HF download failed ({type(error).__name__}); trying Drive backup: " + item["name"])
-
-    source = Path(config["model_root"]) / config["repo"] / item["name"]
-    if not source.is_file() or source.stat().st_size != item["size"]:
-        raise RuntimeError("HF download unavailable and no complete Drive backup: " + item["name"])
-    qlog("Copying Drive backup -> local SSD and verifying SHA256: " + item["name"])
-    partial = target.with_suffix(".gguf.drive.partial")
-    h = hashlib.sha256()
-    copied, last_report = 0, time.monotonic()
-    with source.open("rb") as src, partial.open("wb") as dst:
-        while chunk := src.read(16 * 1024 * 1024):
-            dst.write(chunk)
-            h.update(chunk)
-            copied += len(chunk)
-            if time.monotonic() - last_report >= 30:
-                qlog(f"Copy {target.name}: {copied/1e9:.1f}/{item['size']/1e9:.1f} GB")
-                last_report = time.monotonic()
-    if copied != item["size"] or h.hexdigest() != item["sha256"]:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError("Drive backup size/SHA256 mismatch: " + item["name"])
-    partial.replace(target)
-    qlog("SHA256 OK (Drive): " + target.name)
-    return target
-
-def prepare_model(config, service, work):
-    download = None
-    lock_path = service / ("model-" + config["quant"] + ".json")
-    if lock_path.exists():
-        lock = json.loads(lock_path.read_text())
-    elif config["repo"] == DEFAULT_MODEL_LOCK["repo"] and config["quant"] == "IQ3_S":
-        lock = DEFAULT_MODEL_LOCK
-        write_json_atomic(lock_path, lock)
-    else:
-        HfApi, download = hf_download_client(work)
-        info = HfApi().model_info(config["repo"], files_metadata=True)
-        files = []
-        for entry in info.siblings:
-            if entry.rfilename.startswith(config["quant"] + "/") and entry.rfilename.endswith(".gguf"):
-                if not entry.lfs:
-                    raise RuntimeError("Expected LFS SHA256 metadata")
-                files.append({"name": entry.rfilename, "size": entry.size, "sha256": entry.lfs.sha256})
-        if len(files) != 2:
-            raise RuntimeError(f"Expected two GGUF shards, got {len(files)}")
-        lock = {"repo": config["repo"], "revision": info.sha, "files": sorted(files, key=lambda x: x["name"])}
-        write_json_atomic(lock_path, lock)
-    if lock["repo"] != config["repo"]:
-        raise RuntimeError("Model lock belongs to a different repository")
-    local_dir = work / "model"
-    local_dir.mkdir(exist_ok=True)
-    marker = local_dir / "verified.json"
-    expected = {item["name"]: item["sha256"] for item in lock["files"]}
-    if marker.exists() and json.loads(marker.read_text()) == expected and all(
-        (local_dir / item["name"]).is_file() and (local_dir / item["name"]).stat().st_size == item["size"]
-        for item in lock["files"]
-    ):
-        qlog("Reusing previously verified local model shards")
-        return local_dir / lock["files"][0]["name"]
-    pending = [item for item in lock["files"] if not valid_shard(local_dir / item["name"], item)]
-    if pending:
-        require_space(work, sum(item["size"] for item in pending) + 15 * 1024**3)
-        if download is None:
-            try:
-                _, download = hf_download_client(work)
-            except Exception as error:
-                qlog(f"HF client unavailable ({type(error).__name__}); using Drive backups")
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            futures = [pool.submit(prepare_shard, item, config, lock["revision"], local_dir, download)
-                       for item in pending]
-            for future in futures:
-                future.result()
-    write_json_atomic(marker, expected)
-    return local_dir / lock["files"][0]["name"]
-
-def prepare_projector(config, service, work):
-    item = config.get("vision_projector")
-    if not item:
-        return None
-    lock = json.loads((service / ("model-" + config["quant"] + ".json")).read_text())
-    if lock["repo"] != config["repo"] or lock["revision"] != item["revision"]:
-        raise RuntimeError("Vision projector must match the pinned model repository/revision")
-    local_dir = work / "model"
-    local_dir.mkdir(exist_ok=True)
-    target = local_dir / item["name"]
-    if valid_shard(target, item):
-        qlog("Reusing verified local vision projector")
-        return target
-    require_space(work, item["size"] + 1024**3)
-    try:
-        _, download = hf_download_client(work)
-    except Exception as error:
-        qlog(f"HF client unavailable ({type(error).__name__}); using Drive projector backup")
-        download = None
-    target = prepare_shard(item, config, item["revision"], local_dir, download)
-    backup = Path(config["model_root"]) / config["repo"] / item["name"]
-    if not valid_shard(backup, item):
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        partial = backup.with_suffix(f".gguf.{SERVICE}.{os.getpid()}.partial")
-        shutil.copyfile(target, partial)
-        if not valid_shard(partial, item):
-            partial.unlink(missing_ok=True)
-            raise RuntimeError("Vision projector backup size/SHA256 mismatch")
-        partial.replace(backup)
-    return target
+    print(time.strftime("[%F %T] [qwen-flash] ") + msg, flush=True)
 
 if MOUNT_DRIVE and not Path("/content/drive/MyDrive").is_dir():
     raise RuntimeError("Drive is not mounted. Run via `colabllm qwen-flash up`.")
-if not MOUNT_DRIVE:   # --no-drive: keep durable state/model backups on local SSD
-    for _key, _sub in (("service_dir", "service"), ("model_root", "models")):
-        if CFG[_key].startswith("/content/drive/"):
-            CFG[_key] = str(Path(DATA_DIR) / _sub)
-SERVICE_DIR = Path(CFG["service_dir"])
+
+SERVICE_DIR = Path(DATA_DIR)
 SERVICE_DIR.mkdir(parents=True, exist_ok=True)
-QWEN_WORK = Path(CFG["work_dir"])
-QWEN_WORK.mkdir(parents=True, exist_ok=True)
+DRIVE_BACKUP_ROOT = (
+    Path(os.environ.get("CT_QWEN_MODEL_ROOT", "/content/drive/MyDrive/models"))
+    if (MOUNT_DRIVE and Path("/content/drive/MyDrive").is_dir())
+    else None
+)
+QWEN_RUNTIME_CACHE = (
+    (DRIVE_BACKUP_ROOT / ".runtimes" / "llama.cpp")
+    if DRIVE_BACKUP_ROOT is not None
+    else (SERVICE_DIR / "runtime-cache")
+)
 
-qlog("Preparing model and runtime concurrently; durable state: " + str(SERVICE_DIR))
-with ThreadPoolExecutor(max_workers=2) as pool:
-    f_build = pool.submit(prepare_runtime, CFG, SERVICE_DIR, QWEN_WORK)
-    f_model = pool.submit(prepare_model, CFG, SERVICE_DIR, QWEN_WORK)
-    while not (f_build.done() and f_model.done()):
-        for fut in (f_build, f_model):
-            if fut.done() and fut.exception():
-                raise fut.exception()
-        qlog(f"Preparation heartbeat | build={'done' if f_build.done() else 'running'} "
-             f"model={'done' if f_model.done() else 'running'}")
+CFG = {
+    "repo": os.environ.get("CT_QWEN_REPO", DEFAULT_REPO),
+    "quant": os.environ.get("CT_QWEN_QUANT", DEFAULT_QUANT),
+    "alias": os.environ.get("CT_QWEN_ALIAS", DEFAULT_ALIAS),
+    "context": os.environ.get("CT_QWEN_CONTEXT", str(DEFAULT_CONTEXT)),
+    "cache_type": os.environ.get("CT_QWEN_CACHE_TYPE", "q8_0"),
+    "cpu_moe": os.environ.get("CT_QWEN_CPU_MOE", "auto"),
+    "parallel": int(os.environ.get("CT_QWEN_PARALLEL", "1")),
+    "batch": int(os.environ.get("CT_QWEN_BATCH", "512")),
+    "ubatch": int(os.environ.get("CT_QWEN_UBATCH", "128")),
+    "reasoning": os.environ.get("CT_QWEN_REASONING", "on"),
+    "enable_vision": os.environ.get("CT_QWEN_VISION", "1") != "0",
+    "llama_repo": os.environ.get("CT_LLAMA_REPO", DEFAULT_LLAMA_REPO),
+    "llama_commit": os.environ.get("CT_LLAMA_COMMIT", DEFAULT_LLAMA_COMMIT),
+}
+
+QWEN_GPU = detect_gpu_info()
+QWEN_RAM_MIB = detect_host_ram_mib()
+HW_PLAN = plan_hardware_config(
+    vram_mib=QWEN_GPU["vram_mib"],
+    ram_mib=QWEN_RAM_MIB,
+    quant=CFG["quant"],
+    requested_context=CFG["context"],
+    cache_type=CFG["cache_type"],
+    requested_cpu_moe=CFG["cpu_moe"],
+    enable_vision=CFG["enable_vision"],
+    parallel=CFG["parallel"],
+    batch=CFG["batch"],
+    ubatch=CFG["ubatch"],
+)
+qlog(
+    f"Hardware plan: gpu={QWEN_GPU['name']} ({QWEN_GPU['vram_mib']} MiB VRAM, sm_{QWEN_GPU['cuda_arch'] or 'cpu'}) "
+    f"ram={QWEN_RAM_MIB} MiB -> mode={HW_PLAN['mode']} context={HW_PLAN['context']} "
+    f"(yarn={HW_PLAN['rope_scale']}x, kv={HW_PLAN['cache_type']} {HW_PLAN['kv_cache_mib']} MiB, "
+    f"n_cpu_moe={HW_PLAN['n_cpu_moe']}, ple_in_ram={HW_PLAN['ple_in_ram']}, "
+    f"vram_headroom={HW_PLAN['estimated_vram_headroom_mib']} MiB)"
+)
+
+with ThreadPoolExecutor(max_workers=2) as _pool:
+    _f_runtime = _pool.submit(
+        prepare_llama_runtime,
+        work_dir=QWEN_WORK,
+        cache_root=QWEN_RUNTIME_CACHE,
+        llama_repo=CFG["llama_repo"],
+        llama_commit=CFG["llama_commit"],
+        gpu_info=QWEN_GPU,
+        log=qlog,
+    )
+    _f_model = _pool.submit(
+        stage_model_and_projector,
+        repo=CFG["repo"],
+        quant=CFG["quant"],
+        enable_vision=CFG["enable_vision"],
+        service_dir=SERVICE_DIR,
+        work_dir=QWEN_WORK,
+        drive_backup_root=DRIVE_BACKUP_ROOT,
+        log=qlog,
+    )
+    while not (_f_runtime.done() and _f_model.done()):
+        for _fut in (_f_runtime, _f_model):
+            if _fut.done() and _fut.exception():
+                raise _fut.exception()
+        _free_gb = shutil.disk_usage(QWEN_WORK).free / 1e9
+        qlog(
+            f"Preparation heartbeat | build={'done' if _f_runtime.done() else 'running'} "
+            f"model={'done' if _f_model.done() else 'running'} | free_ssd={_free_gb:.1f} GB"
+        )
         time.sleep(30)
-    BIN_DIR, LLAMA_ENV = f_build.result()
-    MODEL_PATH = f_model.result()
-PROJECTOR_PATH = prepare_projector(CFG, SERVICE_DIR, QWEN_WORK)
-qlog(f"Setup complete: model={MODEL_PATH} projector={PROJECTOR_PATH}")
+    BIN_DIR, LLAMA_ENV, PINNED_COMMIT = _f_runtime.result()
+    MODEL_PATH, PROJECTOR_PATH = _f_model.result()
+
+QWEN_SETUP_OK = True
+qlog(f"Setup complete: commit={PINNED_COMMIT[:10]} model={MODEL_PATH} projector={PROJECTOR_PATH}")
 '''
+)
 
-QWEN_FLASH_SERVICE = r'''# @title 2. Service -- llama-server on 127.0.0.1 (--load-mode none --lazy-mode off, YaRN 800K, vision, --api-key-file)
+QWEN_FLASH_SERVICE = r'''# @title 2. Service -- llama-server on 127.0.0.1 (UD-Q4_K_XL-V2, 1M YaRN 4x, q8_0 KV, PLE in DDR5 RAM, --api-key-file)
+if not globals().get("QWEN_SETUP_OK"):
+    raise RuntimeError("qwen-flash setup cell failed before completing model/runtime preparation; check traceback above.")
+
 KEY_FILE = QWEN_WORK / "api_key.txt"
-KEY_FILE.write_text(API_TOKEN + "\n")
+KEY_FILE.write_text(API_TOKEN + "\n", encoding="utf-8")
 KEY_FILE.chmod(0o600)
-
-SERVER_ARGS = [
-    str(BIN_DIR / "llama-server"), "-m", str(MODEL_PATH), "--alias", CFG["alias"],
-    "--host", "127.0.0.1", "--port", str(SERVICE_PORT), "-ngl", "all",
-    "-c", str(CFG["context"]), "-np", "1", "-lm", "none", "--lazy-mode", "off",
-    "-ctk", CFG["cache_type"], "-ctv", CFG["cache_type"], "-fa", "on",
-    "-b", str(CFG["batch"]), "-ub", str(CFG["ubatch"]),
-    "--jinja", "--api-key-file", str(KEY_FILE), "--no-context-shift", "-lv", "4",
-]
-if PROJECTOR_PATH is not None:
-    SERVER_ARGS += ["--mmproj", str(PROJECTOR_PATH)]
-if CFG.get("rope_scaling"):
-    SERVER_ARGS += [
-        "--rope-scaling", CFG["rope_scaling"],
-        "--rope-scale", str(CFG["rope_scale"]),
-        "--yarn-orig-ctx", str(CFG["yarn_orig_ctx"]),
-    ]
+SPAWN_LOG_OFFSET = 0
 
 def start_service():
-    subprocess.run(["pkill", "-f", "llama-server"], check=False)
-    qlog(f"Starting llama-server: ctx={CFG['context']}, KV={CFG['cache_type']}")
-    return ct_spawn("llama-server", SERVER_ARGS, env=LLAMA_ENV)
+    global SPAWN_LOG_OFFSET
+    subprocess.run(["pkill", "-f", str(BIN_DIR / "llama-server")], check=False, timeout=15)
+    if HW_PLAN.get("ple_in_ram"):
+        evict_gguf_page_cache(QWEN_WORK / "model", log=qlog)
+    args = build_server_args(
+        server_bin=BIN_DIR / "llama-server",
+        model_path=MODEL_PATH,
+        alias=CFG["alias"],
+        port=SERVICE_PORT,
+        key_file=KEY_FILE,
+        plan=HW_PLAN,
+        projector_path=PROJECTOR_PATH,
+        reasoning=CFG["reasoning"],
+    )
+    SPAWN_LOG_OFFSET = ct_log_size("llama-server")
+    ple_loc = "host-ram" if HW_PLAN.get("ple_in_ram") else "ssd-mmap-lazy"
+    qlog(
+        f"Starting llama-server on 127.0.0.1:{SERVICE_PORT} | ctx={HW_PLAN['context']} "
+        f"mode={HW_PLAN['mode']} ple={ple_loc} kv={HW_PLAN['cache_type']} "
+        f"batch={HW_PLAN['batch']}/{HW_PLAN['ubatch']} reasoning={CFG['reasoning']}"
+    )
+    return ct_spawn("llama-server", args, env=LLAMA_ENV)
 
 PROCS["service"] = (start_service(), start_service)
 '''
 
-QWEN_FLASH_KEEPALIVE = r'''# @title 5. Ready + keep-alive -- verify local/public auth, 800K context, vision, smoke test, then supervise
+QWEN_FLASH_KEEPALIVE = r'''# @title 5. Ready + keep-alive -- auto-stepup CPU MoE on OOM, verify auth/1M context/vision, smoke completion & supervise
+if not globals().get("QWEN_SETUP_OK") or "service" not in PROCS:
+    raise RuntimeError("qwen-flash service did not start because an earlier notebook cell failed; see traceback above.")
+
 BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 
 def http_json(url, key=None, payload=None, timeout=15):
     headers = {"Content-Type": "application/json", "User-Agent": BROWSER_UA}
     if key is not None:
         headers["Authorization"] = "Bearer " + key
-    req = urllib.request.Request(url, headers=headers,
-                                 data=None if payload is None else json.dumps(payload).encode())
+    req = urllib.request.Request(
+        url,
+        headers=headers,
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read())
+            return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
         return err.code, {}
 
@@ -1076,67 +896,138 @@ def auth_check(base, key):
             raise RuntimeError(f"Authentication test failed on {base}: expected {expected}, got {code}")
 
 LOCAL_BASE = f"http://127.0.0.1:{SERVICE_PORT}"
-deadline = time.monotonic() + 1800
-last_notice = 0
+moe_stepups = 0
+ctx_fallback = [819_200, 524_288]
+ctx_idx = 0
+deadline = time.monotonic() + 2400
+last_notice = 0.0
+
 while time.monotonic() < deadline:
     proc = PROCS["service"][0]
     if proc.poll() is not None:
-        raise RuntimeError("llama-server exited during load:\n" + ct_tail("llama-server", 40))
+        recent_log = ct_log_since("llama-server", SPAWN_LOG_OFFSET)
+        if (
+            CFG["cpu_moe"].strip().lower() == "auto"
+            and moe_stepups < 3
+            and HW_PLAN["n_cpu_moe"] + 2 <= MODEL_NUM_LAYERS
+            and looks_like_oom(recent_log)
+        ):
+            moe_stepups += 1
+            prev_moe = HW_PLAN["n_cpu_moe"]
+            HW_PLAN["n_cpu_moe"] = min(MODEL_NUM_LAYERS, prev_moe + 2)
+            HW_PLAN["mode"] = f"hybrid-cpu-moe-{HW_PLAN['n_cpu_moe']}"
+            qlog(
+                f"Startup CUDA OOM at n_cpu_moe={prev_moe}; offloading +2 expert layers "
+                f"(-> n_cpu_moe={HW_PLAN['n_cpu_moe']}) while keeping ctx={HW_PLAN['context']}"
+            )
+            PROCS["service"] = (start_service(), start_service)
+            continue
+        if HW_PLAN.get("context_auto") and ctx_idx < len(ctx_fallback) and looks_like_oom(recent_log):
+            prev_ctx = HW_PLAN["context"]
+            next_ctx = ctx_fallback[ctx_idx]
+            ctx_idx += 1
+            if next_ctx < prev_ctx:
+                rs, rscale, yorig = compute_yarn_params(next_ctx)
+                HW_PLAN["context"] = next_ctx
+                HW_PLAN["rope_scaling"] = rs
+                HW_PLAN["rope_scale"] = rscale
+                HW_PLAN["yarn_orig_ctx"] = yorig
+                qlog(f"Startup OOM at ctx={prev_ctx}; stepping down to ctx={next_ctx} and retrying")
+                PROCS["service"] = (start_service(), start_service)
+                continue
+        raise RuntimeError("llama-server exited during load:\n" + ct_tail("llama-server", 60))
     try:
-        if http_json(LOCAL_BASE + "/health", API_TOKEN)[0] == 200:
+        if http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200:
             break
     except (OSError, ValueError):
         pass
-    if time.monotonic() - last_notice > 60:
-        qlog("Waiting for model load / warmup | " + ct_gpu_stat("memory.used,utilization.gpu"))
+    if time.monotonic() - last_notice > 45:
+        qlog(
+            f"Waiting for model load / warmup (ctx={HW_PLAN['context']}, mode={HW_PLAN['mode']}) | "
+            f"GPU: {ct_gpu_stat('memory.used,memory.total,utilization.gpu')}"
+        )
         last_notice = time.monotonic()
     time.sleep(5)
 else:
-    raise RuntimeError("Model load timeout")
+    raise RuntimeError("Model load timeout:\n" + ct_tail("llama-server", 60))
+
+if HW_PLAN.get("ple_in_ram"):
+    evict_gguf_page_cache(QWEN_WORK / "model", log=qlog)
 
 auth_check(LOCAL_BASE, API_TOKEN)
-code, props = http_json(LOCAL_BASE + "/props", API_TOKEN)
-allocated = props.get("default_generation_settings", {}).get("n_ctx")
-if code != 200 or allocated != CFG["context"]:
-    raise RuntimeError(f"Actual context differs from requested context: {allocated}")
-vision_enabled = props.get("modalities", {}).get("vision", False)
-if PROJECTOR_PATH is not None and not vision_enabled:
+code, props = http_json(LOCAL_BASE + "/props", API_TOKEN, timeout=20)
+allocated = (props.get("default_generation_settings") or {}).get("n_ctx")
+if code != 200 or allocated != HW_PLAN["context"]:
+    raise RuntimeError(f"Actual context ({allocated}) differs from requested context ({HW_PLAN['context']})")
+vision_enabled = bool((props.get("modalities") or {}).get("vision", False))
+if PROJECTOR_PATH is not None and HW_PLAN.get("enable_vision", True) and not vision_enabled:
     raise RuntimeError("Vision projector configured but server does not advertise vision")
-qlog(f"Local verified: auth=401/401/200, n_ctx={allocated}, vision={vision_enabled}")
+qlog(
+    f"Local verified: auth=401/401/200, n_ctx={allocated}, vision={vision_enabled}, "
+    f"mode={HW_PLAN['mode']}, kv={HW_PLAN['cache_type']}, ple_in_ram={HW_PLAN['ple_in_ram']}"
+)
 
 # Public endpoint verification (DNS/edge propagation can take a few seconds)
-ct_public_gate(PUBLIC_URL, lambda: http_json(PUBLIC_URL + "/v1/models", API_TOKEN, timeout=15)[0],
-               lambda: auth_check(PUBLIC_URL, API_TOKEN), qlog, timeout=120, interval=10)
-code, resp = http_json(PUBLIC_URL + "/v1/chat/completions", API_TOKEN, {
+ct_public_gate(
+    PUBLIC_URL,
+    lambda: http_json(PUBLIC_URL + "/v1/models", API_TOKEN, timeout=15)[0],
+    lambda: auth_check(PUBLIC_URL, API_TOKEN),
+    qlog,
+    timeout=180,
+    interval=8,
+)
+smoke_payload = {
     "model": CFG["alias"],
     "messages": [{"role": "user", "content": "Reply with exactly two words: deployment successful"}],
-    "max_tokens": 64, "temperature": 0,
-    "chat_template_kwargs": {"enable_thinking": False},
-}, timeout=180)
+    "max_tokens": 64,
+    "temperature": 0,
+}
+if CFG["reasoning"] != "off":
+    smoke_payload["chat_template_kwargs"] = {"enable_thinking": False}
+code, resp = http_json(PUBLIC_URL + "/v1/chat/completions", API_TOKEN, smoke_payload, timeout=180)
 if code != 200:
     raise RuntimeError(f"Public smoke completion failed: HTTP {code}")
-reply = (resp.get("choices") or [{}])[0].get("message", {}).get("content", "")
-qlog(f"PUBLIC VERIFIED: {PUBLIC_URL}/v1 | reply={reply[:60]}")
+msg_obj = ((resp.get("choices") or [{}])[0].get("message") or {})
+reply = msg_obj.get("content") or msg_obj.get("reasoning_content") or ""
+qlog(f"PUBLIC VERIFIED: {PUBLIC_URL}/v1 | n_ctx={allocated} | reply={reply.strip()[:60]!r}")
+
 ver_rec = {
     "service": SERVICE,
-    "verified_at": time.strftime("%FT%T%z"), "base_url": PUBLIC_URL + "/v1",
-    "context_allocated": allocated, "vision_enabled": vision_enabled, "reply": reply,
+    "verified_at": time.strftime("%FT%T%z"),
+    "base_url": PUBLIC_URL + "/v1",
+    "repo": CFG["repo"],
+    "quant": CFG["quant"],
+    "alias": CFG["alias"],
+    "mode": HW_PLAN["mode"],
+    "n_cpu_moe": HW_PLAN["n_cpu_moe"],
+    "cache_type": HW_PLAN["cache_type"],
+    "ple_in_ram": HW_PLAN["ple_in_ram"],
+    "context_allocated": allocated,
+    "vision_enabled": vision_enabled,
+    "reply": reply[:120],
 }
 write_json_atomic(SERVICE_DIR / "last-verification.json", ver_rec)
 if SERVICE != "qwen-flash":
     write_json_atomic(SERVICE_DIR / f"last-verification-{SERVICE}.json", ver_rec)
 
-print(f"{SERVICE} is up: {PUBLIC_URL}")
+print(f"{SERVICE} is up: {PUBLIC_URL} (n_ctx={allocated}, mode={HW_PLAN['mode']})")
 print("CT_READY", flush=True)
 
 def qwen_heartbeat(uptime):
-    gpu_mem = ct_gpu_stat("memory.used,memory.total")
+    gpu_mem = ct_gpu_stat("memory.used,memory.total,utilization.gpu")
     status_rec = {
         "service": SERVICE,
-        "kernel_pid": os.getpid(), "server_pid": PROCS["service"][0].pid,
-        "tunnel_pid": PROCS[TUNNEL_PROCESS_KEY][0].pid, "context": CFG["context"],
-        "alias": CFG["alias"], "url": PUBLIC_URL + "/v1",
-        "updated_at": time.strftime("%FT%T%z"), "uptime_sec": uptime,
+        "kernel_pid": os.getpid(),
+        "server_pid": PROCS["service"][0].pid,
+        "tunnel_pid": PROCS[TUNNEL_PROCESS_KEY][0].pid,
+        "context": HW_PLAN["context"],
+        "mode": HW_PLAN["mode"],
+        "n_cpu_moe": HW_PLAN["n_cpu_moe"],
+        "cache_type": HW_PLAN["cache_type"],
+        "alias": CFG["alias"],
+        "url": PUBLIC_URL + "/v1",
+        "updated_at": time.strftime("%FT%T%z"),
+        "uptime_sec": uptime,
         "gpu_memory": gpu_mem,
     }
     try:
@@ -1145,10 +1036,368 @@ def qwen_heartbeat(uptime):
             write_json_atomic(SERVICE_DIR / f"last-status-{SERVICE}.json", status_rec)
     except OSError:
         pass
-    qlog("heartbeat | " + gpu_mem)
+    qlog(f"heartbeat | up={uptime}s | n_ctx={HW_PLAN['context']} | GPU: {gpu_mem}")
 
-ct_watchdog(lambda: http_json(LOCAL_BASE + "/health", API_TOKEN)[0] == 200, start_service, qlog,
-            log_name="llama-server", heartbeat=qwen_heartbeat)
+ct_watchdog(
+    lambda: http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200,
+    start_service,
+    qlog,
+    log_name="llama-server",
+    heartbeat=qwen_heartbeat,
+)
+'''
+
+# --------------------------------------------------------------------------- deepseek-qwen-9b (L4 default / T4, llama.cpp b11540, i1-Q4_K_M + native MTP, 256K + q8_0 KV + F16 vision)
+DEEPSEEK_QWEN_9B_CFG = dict(name="deepseek-qwen-9b", service_port=8000, auth="builtin", public_port=8000,
+                            health_path="/health", ready_timeout=2400)
+
+DEEPSEEK_QWEN_9B_SETUP = (
+    r'''# @title 1. Setup -- parallel llama.cpp b11540 CUDA cache + i1-Q4_K_M GGUF + native MTP Q8_0 sidecar + F16 mmproj + 256K L4/T4 plan
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+DS9B_WORK = Path(os.environ.get("CT_DS9B_WORK_DIR", "/content/deepseek-qwen-9b"))
+DS9B_WORK.mkdir(parents=True, exist_ok=True)
+(DS9B_WORK / "deepseek_qwen_9b_runtime.py").write_text('''
+    + repr((ROOT / "src/colabllm/lib/deepseek_qwen_9b_runtime.py").read_text())
+    + r''', encoding="utf-8")
+if str(DS9B_WORK) not in sys.path:
+    sys.path.insert(0, str(DS9B_WORK))
+
+from deepseek_qwen_9b_runtime import (
+    DEFAULT_ALIAS,
+    DEFAULT_LLAMA_COMMIT,
+    DEFAULT_LLAMA_REPO,
+    DEFAULT_MTP_DRAFT_MAX,
+    DEFAULT_MTP_MODE,
+    DEFAULT_QUANT,
+    DEFAULT_REPO,
+    UPSTREAM_HF_REPO,
+    build_server_args,
+    compute_yarn_params,
+    detect_gpu_info,
+    detect_host_ram_mib,
+    looks_like_oom,
+    plan_hardware_config,
+    prepare_llama_runtime,
+    stage_model_and_projector,
+    stage_mtp_sidecar,
+    write_json_atomic,
+)
+
+def ds9log(msg):
+    print(time.strftime("[%F %T] [deepseek-qwen-9b] ") + msg, flush=True)
+
+if MOUNT_DRIVE and not Path("/content/drive/MyDrive").is_dir():
+    raise RuntimeError("Drive is not mounted. Run via `colabllm deepseek-qwen-9b up`.")
+
+SERVICE_DIR = Path(DATA_DIR)
+SERVICE_DIR.mkdir(parents=True, exist_ok=True)
+DRIVE_BACKUP_ROOT = (
+    Path(os.environ.get("CT_DS9B_MODEL_ROOT", "/content/drive/MyDrive/models"))
+    if (MOUNT_DRIVE and Path("/content/drive/MyDrive").is_dir())
+    else None
+)
+DS9B_RUNTIME_CACHE = (
+    (DRIVE_BACKUP_ROOT / ".runtimes" / "llama.cpp")
+    if DRIVE_BACKUP_ROOT is not None
+    else (SERVICE_DIR / "runtime-cache")
+)
+
+CFG = {
+    "repo": os.environ.get("CT_DS9B_REPO", DEFAULT_REPO),
+    "upstream_repo": os.environ.get("CT_DS9B_UPSTREAM_REPO", UPSTREAM_HF_REPO),
+    "quant": os.environ.get("CT_DS9B_QUANT", DEFAULT_QUANT),
+    "alias": os.environ.get("CT_DS9B_ALIAS", DEFAULT_ALIAS),
+    "context": os.environ.get("CT_DS9B_CONTEXT", "auto"),
+    "cache_type": os.environ.get("CT_DS9B_CACHE_TYPE", "q8_0"),
+    "parallel": int(os.environ.get("CT_DS9B_PARALLEL", "1")),
+    "batch": int(os.environ.get("CT_DS9B_BATCH", "2048")),
+    "ubatch": int(os.environ.get("CT_DS9B_UBATCH", "512")),
+    "reasoning": os.environ.get("CT_DS9B_REASONING", "on"),
+    "enable_vision": os.environ.get("CT_DS9B_VISION", "1") != "0",
+    "mtp": os.environ.get("CT_DS9B_MTP", DEFAULT_MTP_MODE),
+    "mtp_draft_max": int(os.environ.get("CT_DS9B_MTP_DRAFT", str(DEFAULT_MTP_DRAFT_MAX))),
+    "llama_repo": os.environ.get("CT_LLAMA_REPO", DEFAULT_LLAMA_REPO),
+    "llama_commit": os.environ.get("CT_LLAMA_COMMIT", DEFAULT_LLAMA_COMMIT),
+}
+
+DS9B_GPU = detect_gpu_info()
+DS9B_RAM_MIB = detect_host_ram_mib()
+HW_PLAN = plan_hardware_config(
+    vram_mib=DS9B_GPU["vram_mib"],
+    ram_mib=DS9B_RAM_MIB,
+    quant=CFG["quant"],
+    requested_context=CFG["context"],
+    cache_type=CFG["cache_type"],
+    enable_vision=CFG["enable_vision"],
+    mtp=CFG["mtp"],
+    mtp_draft_max=CFG["mtp_draft_max"],
+    parallel=CFG["parallel"],
+    batch=CFG["batch"],
+    ubatch=CFG["ubatch"],
+)
+ds9log(
+    f"Hardware plan: gpu={DS9B_GPU['name']} ({DS9B_GPU['vram_mib']} MiB VRAM, sm_{DS9B_GPU['cuda_arch'] or 'cpu'}) "
+    f"ram={DS9B_RAM_MIB} MiB -> mode={HW_PLAN['mode']} quant={HW_PLAN['quant']} mtp={HW_PLAN['enable_mtp']} "
+    f"context={HW_PLAN['context']} (yarn={HW_PLAN['rope_scale']}x, kv={HW_PLAN['cache_type']} {HW_PLAN['kv_cache_mib']} MiB, "
+    f"vram_headroom={HW_PLAN['estimated_vram_headroom_mib']} MiB)"
+)
+
+with ThreadPoolExecutor(max_workers=3) as _pool:
+    _f_runtime = _pool.submit(
+        prepare_llama_runtime,
+        work_dir=DS9B_WORK,
+        cache_root=DS9B_RUNTIME_CACHE,
+        llama_repo=CFG["llama_repo"],
+        llama_commit=CFG["llama_commit"],
+        gpu_info=DS9B_GPU,
+        log=ds9log,
+    )
+    _f_model = _pool.submit(
+        stage_model_and_projector,
+        repo=CFG["repo"],
+        quant=HW_PLAN["quant"],
+        enable_vision=CFG["enable_vision"],
+        service_dir=SERVICE_DIR,
+        work_dir=DS9B_WORK,
+        drive_backup_root=DRIVE_BACKUP_ROOT,
+        log=ds9log,
+    )
+    _f_mtp = _pool.submit(
+        stage_mtp_sidecar,
+        upstream_repo=CFG["upstream_repo"],
+        llama_repo=CFG["llama_repo"],
+        llama_commit=CFG["llama_commit"],
+        work_dir=DS9B_WORK,
+        drive_backup_root=DRIVE_BACKUP_ROOT,
+        mtp_mode=("off" if not HW_PLAN.get("enable_mtp") else CFG["mtp"]),
+        log=ds9log,
+    )
+    while not (_f_runtime.done() and _f_model.done() and _f_mtp.done()):
+        for _fut in (_f_runtime, _f_model, _f_mtp):
+            if _fut.done() and _fut.exception():
+                raise _fut.exception()
+        _free_gb = shutil.disk_usage(DS9B_WORK).free / 1e9
+        ds9log(
+            f"Preparation heartbeat | build={'done' if _f_runtime.done() else 'running'} "
+            f"model={'done' if _f_model.done() else 'running'} "
+            f"mtp={'done' if _f_mtp.done() else 'running'} | free_ssd={_free_gb:.1f} GB"
+        )
+        time.sleep(25)
+    BIN_DIR, LLAMA_ENV, PINNED_COMMIT = _f_runtime.result()
+    MODEL_PATH, PROJECTOR_PATH = _f_model.result()
+    MTP_PATH = _f_mtp.result()
+
+if MTP_PATH is None:
+    HW_PLAN["enable_mtp"] = False
+
+DS9B_SETUP_OK = True
+ds9log(f"Setup complete: commit={PINNED_COMMIT[:10]} model={MODEL_PATH} projector={PROJECTOR_PATH} mtp={MTP_PATH}")
+'''
+)
+
+DEEPSEEK_QWEN_9B_SERVICE = r'''# @title 2. Service -- llama-server on 127.0.0.1 (DeepSeek-V4-Pro-Qwen3.5-9B, i1-Q4_K_M + draft-mtp, 256K q8_0 KV, F16 vision)
+if not globals().get("DS9B_SETUP_OK"):
+    raise RuntimeError("deepseek-qwen-9b setup cell failed before completing model/runtime preparation; check traceback above.")
+
+KEY_FILE = DS9B_WORK / "api_key.txt"
+KEY_FILE.write_text(API_TOKEN + "\n", encoding="utf-8")
+KEY_FILE.chmod(0o600)
+SPAWN_LOG_OFFSET = 0
+
+def start_service():
+    global SPAWN_LOG_OFFSET
+    subprocess.run(["pkill", "-f", str(BIN_DIR / "llama-server")], check=False, timeout=15)
+    args = build_server_args(
+        server_bin=BIN_DIR / "llama-server",
+        model_path=MODEL_PATH,
+        alias=CFG["alias"],
+        port=SERVICE_PORT,
+        key_file=KEY_FILE,
+        plan=HW_PLAN,
+        projector_path=PROJECTOR_PATH,
+        mtp_path=MTP_PATH,
+        reasoning=CFG["reasoning"],
+    )
+    SPAWN_LOG_OFFSET = ct_log_size("llama-server")
+    ds9log(
+        f"Starting llama-server on 127.0.0.1:{SERVICE_PORT} | quant={HW_PLAN['quant']} ctx={HW_PLAN['context']} "
+        f"mtp={bool(MTP_PATH and HW_PLAN.get('enable_mtp'))}(n={HW_PLAN.get('mtp_draft_max')}) "
+        f"mode={HW_PLAN['mode']} kv={HW_PLAN['cache_type']} "
+        f"batch={HW_PLAN['batch']}/{HW_PLAN['ubatch']} reasoning={CFG['reasoning']}"
+    )
+    return ct_spawn("llama-server", args, env=LLAMA_ENV)
+
+PROCS["service"] = (start_service(), start_service)
+'''
+
+DEEPSEEK_QWEN_9B_KEEPALIVE = r'''# @title 5. Ready + keep-alive -- auto-stepdown context on OOM, verify auth/256K context/vision, smoke completion & supervise
+if not globals().get("DS9B_SETUP_OK") or "service" not in PROCS:
+    raise RuntimeError("deepseek-qwen-9b service did not start because an earlier notebook cell failed; see traceback above.")
+
+BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+
+def http_json(url, key=None, payload=None, timeout=15):
+    headers = {"Content-Type": "application/json", "User-Agent": BROWSER_UA}
+    if key is not None:
+        headers["Authorization"] = "Bearer " + key
+    req = urllib.request.Request(
+        url,
+        headers=headers,
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        return err.code, {}
+
+def auth_check(base, key):
+    for candidate, expected in ((None, 401), ("invalid-deployment-test-key", 401), (key, 200)):
+        code, _ = http_json(base + "/v1/models", candidate)
+        if code != expected:
+            raise RuntimeError(f"Authentication test failed on {base}: expected {expected}, got {code}")
+
+LOCAL_BASE = f"http://127.0.0.1:{SERVICE_PORT}"
+ctx_fallback = [196_608, 131_072, 65_536, 32_768]
+ctx_idx = 0
+deadline = time.monotonic() + 900
+last_notice = 0.0
+
+while time.monotonic() < deadline:
+    proc = PROCS["service"][0]
+    if proc.poll() is not None:
+        recent_log = ct_log_since("llama-server", SPAWN_LOG_OFFSET)
+        if HW_PLAN.get("context_auto") and ctx_idx < len(ctx_fallback) and looks_like_oom(recent_log):
+            prev_ctx = HW_PLAN["context"]
+            while ctx_idx < len(ctx_fallback) and ctx_fallback[ctx_idx] >= prev_ctx:
+                ctx_idx += 1
+            if ctx_idx < len(ctx_fallback):
+                next_ctx = ctx_fallback[ctx_idx]
+                ctx_idx += 1
+                rs, rscale, yorig = compute_yarn_params(next_ctx)
+                HW_PLAN["context"] = next_ctx
+                HW_PLAN["rope_scaling"] = rs
+                HW_PLAN["rope_scale"] = rscale
+                HW_PLAN["yarn_orig_ctx"] = yorig
+                ds9log(f"Startup OOM at ctx={prev_ctx}; stepping down to ctx={next_ctx} and retrying")
+                PROCS["service"] = (start_service(), start_service)
+                continue
+        if HW_PLAN.get("enable_mtp") and str(CFG.get("mtp", "auto")).lower() == "auto":
+            HW_PLAN["enable_mtp"] = False
+            ds9log("llama-server exited during MTP draft startup in auto mode; retrying without MTP draft:\n" + recent_log[-500:])
+            PROCS["service"] = (start_service(), start_service)
+            continue
+        raise RuntimeError("llama-server exited during load:\n" + ct_tail("llama-server", 60))
+    try:
+        if http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200:
+            break
+    except (OSError, ValueError):
+        pass
+    if time.monotonic() - last_notice > 30:
+        ds9log(
+            f"Waiting for model load / warmup (quant={HW_PLAN['quant']}, mtp={HW_PLAN.get('enable_mtp')}, ctx={HW_PLAN['context']}) | "
+            f"GPU: {ct_gpu_stat('memory.used,memory.total,utilization.gpu')}"
+        )
+        last_notice = time.monotonic()
+    time.sleep(4)
+else:
+    raise RuntimeError("Model load timeout:\n" + ct_tail("llama-server", 60))
+
+auth_check(LOCAL_BASE, API_TOKEN)
+code, props = http_json(LOCAL_BASE + "/props", API_TOKEN, timeout=20)
+allocated = (props.get("default_generation_settings") or {}).get("n_ctx")
+if code != 200 or allocated != HW_PLAN["context"]:
+    raise RuntimeError(f"Actual context ({allocated}) differs from requested context ({HW_PLAN['context']})")
+vision_enabled = bool((props.get("modalities") or {}).get("vision", False))
+if PROJECTOR_PATH is not None and HW_PLAN.get("enable_vision", True) and not vision_enabled:
+    raise RuntimeError("Vision projector configured but server does not advertise vision")
+mtp_active = bool(MTP_PATH is not None and HW_PLAN.get("enable_mtp", False))
+ds9log(
+    f"Local verified: auth=401/401/200, quant={HW_PLAN['quant']}, mtp={mtp_active}, n_ctx={allocated}, "
+    f"vision={vision_enabled}, mode={HW_PLAN['mode']}, kv={HW_PLAN['cache_type']}"
+)
+
+# Public endpoint verification (DNS/edge propagation can take a few seconds)
+ct_public_gate(
+    PUBLIC_URL,
+    lambda: http_json(PUBLIC_URL + "/v1/models", API_TOKEN, timeout=15)[0],
+    lambda: auth_check(PUBLIC_URL, API_TOKEN),
+    ds9log,
+    timeout=180,
+    interval=8,
+)
+smoke_payload = {
+    "model": CFG["alias"],
+    "messages": [{"role": "user", "content": "Reply with exactly two words: deployment successful"}],
+    "max_tokens": 64,
+    "temperature": 0,
+}
+if CFG["reasoning"] != "off":
+    smoke_payload["chat_template_kwargs"] = {"enable_thinking": False}
+code, resp = http_json(PUBLIC_URL + "/v1/chat/completions", API_TOKEN, smoke_payload, timeout=120)
+if code != 200:
+    raise RuntimeError(f"Public smoke completion failed: HTTP {code}")
+msg_obj = ((resp.get("choices") or [{}])[0].get("message") or {})
+reply = msg_obj.get("content") or msg_obj.get("reasoning_content") or ""
+ds9log(f"PUBLIC VERIFIED: {PUBLIC_URL}/v1 | quant={HW_PLAN['quant']} | mtp={mtp_active} | n_ctx={allocated} | reply={reply.strip()[:60]!r}")
+
+ver_rec = {
+    "service": SERVICE,
+    "verified_at": time.strftime("%FT%T%z"),
+    "base_url": PUBLIC_URL + "/v1",
+    "repo": HW_PLAN.get("resolved_repo") or CFG["repo"],
+    "quant": HW_PLAN["quant"],
+    "alias": CFG["alias"],
+    "mode": HW_PLAN["mode"],
+    "cache_type": HW_PLAN["cache_type"],
+    "context_allocated": allocated,
+    "vision_enabled": vision_enabled,
+    "mtp_enabled": mtp_active,
+    "mtp_draft_max": HW_PLAN.get("mtp_draft_max"),
+    "reply": reply[:120],
+}
+write_json_atomic(SERVICE_DIR / "last-verification.json", ver_rec)
+if SERVICE != "deepseek-qwen-9b":
+    write_json_atomic(SERVICE_DIR / f"last-verification-{SERVICE}.json", ver_rec)
+
+print(f"{SERVICE} is up: {PUBLIC_URL} (quant={HW_PLAN['quant']}, mtp={mtp_active}, n_ctx={allocated})")
+print("CT_READY", flush=True)
+
+def ds9b_heartbeat(uptime):
+    gpu_mem = ct_gpu_stat("memory.used,memory.total,utilization.gpu")
+    status_rec = {
+        "service": SERVICE,
+        "kernel_pid": os.getpid(),
+        "server_pid": PROCS["service"][0].pid,
+        "tunnel_pid": PROCS[TUNNEL_PROCESS_KEY][0].pid,
+        "quant": HW_PLAN["quant"],
+        "mtp_enabled": mtp_active,
+        "context": HW_PLAN["context"],
+        "mode": HW_PLAN["mode"],
+        "cache_type": HW_PLAN["cache_type"],
+        "alias": CFG["alias"],
+        "url": PUBLIC_URL + "/v1",
+        "updated_at": time.strftime("%FT%T%z"),
+        "uptime_sec": uptime,
+        "gpu_memory": gpu_mem,
+    }
+    try:
+        write_json_atomic(SERVICE_DIR / "last-status.json", status_rec)
+        if SERVICE != "deepseek-qwen-9b":
+            write_json_atomic(SERVICE_DIR / f"last-status-{SERVICE}.json", status_rec)
+    except OSError:
+        pass
+    ds9log(f"heartbeat | up={uptime}s | quant={HW_PLAN['quant']} | mtp={mtp_active} | n_ctx={HW_PLAN['context']} | GPU: {gpu_mem}")
+
+ct_watchdog(
+    lambda: http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200,
+    start_service,
+    ds9log,
+    log_name="llama-server",
+    heartbeat=ds9b_heartbeat,
+)
 '''
 
 # --------------------------------------------------------------------------- comfyui (Caddy auth + ComfyUI-Manager)
@@ -4343,7 +4592,846 @@ ct_watchdog(
 )
 '''
 
+# --------------------------------------------------------------------------- drama3 (G4 / H100 / A100 · SGLang-Omni Fish Audio Drama 3 TTS & Novel Narration)
+DRAMA3_CFG = dict(
+    name="drama3",
+    service_port=8000,
+    auth="builtin",
+    public_port=8000,
+    health_path="/health",
+    ready_timeout=3600,
+)
+
+DRAMA3_SETUP = r'''# @title 1. Setup -- install SGLang-Omni 0.2.0 + stage Fish Audio Drama 3 & S2-Pro codec on local SSD
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+VARIANT_REPOS = {
+    "bf16": "fishaudio/drama-3",
+    "drama-3": "fishaudio/drama-3",
+    "int4": "fishaudio/drama-3-int4",
+    "drama-3-int4": "fishaudio/drama-3-int4",
+}
+CODEC_REPO = "fishaudio/s2-pro"
+CODEC_REVISION = "1de9996b6be38b745688de084d87a5633f714e4e"
+
+def dlog(msg):
+    print(time.strftime("[%F %T] [drama3] ") + msg, flush=True)
+
+_gpu_raw = subprocess.check_output(
+    ["nvidia-smi", "--query-gpu=name,memory.total,compute_cap", "--format=csv,noheader,nounits"],
+    text=True,
+).strip().splitlines()[0]
+_gpu_parts = [p.strip() for p in _gpu_raw.split(",")]
+GPU_NAME = _gpu_parts[0]
+GPU_VRAM_MIB = int(float(_gpu_parts[1])) if len(_gpu_parts) > 1 else 0
+GPU_ARCH = (_gpu_parts[2] if len(_gpu_parts) > 2 else "8.0").replace(".", "")
+
+RAW_VARIANT = os.environ.get("CT_DRAMA3_VARIANT", "auto").strip().lower()
+EXPLICIT_MODEL = os.environ.get("CT_DRAMA3_MODEL", "").strip()
+if EXPLICIT_MODEL:
+    MODEL_REPO = EXPLICIT_MODEL
+    VARIANT = "int4" if "int4" in EXPLICIT_MODEL.lower() else "bf16"
+elif RAW_VARIANT in VARIANT_REPOS:
+    MODEL_REPO = VARIANT_REPOS[RAW_VARIANT]
+    VARIANT = "int4" if "int4" in RAW_VARIANT else "bf16"
+else:
+    VARIANT = "bf16" if GPU_VRAM_MIB >= 72000 else "int4"
+    MODEL_REPO = VARIANT_REPOS[VARIANT]
+
+MODEL_ALIAS = os.environ.get("CT_DRAMA3_ALIAS", "drama3").strip() or "drama3"
+ENGINE_GPU_MEM = float(os.environ.get("CT_DRAMA3_ENGINE_GPU_MEM", "0.70"))
+VOCODER_GPU_MEM = float(os.environ.get("CT_DRAMA3_VOCODER_GPU_MEM", "0.10"))
+MAX_RUNNING_REQS = int(os.environ.get("CT_DRAMA3_MAX_RUNNING_REQS", "16"))
+CONTEXT_LENGTH = int(os.environ.get("CT_DRAMA3_CONTEXT_LENGTH", "16384"))
+BATCH_MAX_ITEMS = int(os.environ.get("CT_DRAMA3_BATCH_MAX_ITEMS", "32"))
+MAX_REF_SEC = float(os.environ.get("CT_DRAMA3_MAX_REF_SEC", "60.0"))
+SGL_OMNI_VER = os.environ.get("CT_DRAMA3_SGL_OMNI_VERSION", "0.2.0").strip() or "0.2.0"
+
+D3_WORK = Path("/content/drama3")
+VENV_DIR = D3_WORK / "venv"
+MODELS_ROOT = D3_WORK / "models"
+MODEL_DIR = MODELS_ROOT / MODEL_REPO.split("/")[-1]
+CODEC_DIR = D3_WORK / "codec"
+SPEAKERS_DIR = D3_WORK / "speakers"
+DRIVE_VOICES_DIR = Path(DATA_DIR) / "voices"
+DRIVE_OUTPUT_DIR = Path(DATA_DIR) / "outputs"
+DEFAULT_REF_WAV = D3_WORK / "default_ref.wav"
+DEFAULT_REF_TEXT = (
+    "Okay. Yeah. I resent you. I love you. I respect you. "
+    "But you know what? You blew it! And thanks to you."
+)
+
+# Local NVMe SSD compiler caches archived as single tarballs on Google Drive
+FLASHINFER_CACHE_DIR = D3_WORK / "flashinfer-cache"
+TRITON_CACHE_DIR = D3_WORK / "triton-cache"
+INDUCTOR_CACHE_DIR = D3_WORK / "inductor-cache"
+FLASHINFER_LEGACY_DIR = Path(DATA_DIR) / "flashinfer-cache"
+TRITON_LEGACY_DIR = Path(DATA_DIR) / "triton-cache"
+INDUCTOR_LEGACY_DIR = Path(DATA_DIR) / "inductor-cache"
+
+for _d in (
+    D3_WORK, MODELS_ROOT, CODEC_DIR, SPEAKERS_DIR, DRIVE_VOICES_DIR, DRIVE_OUTPUT_DIR,
+    FLASHINFER_CACHE_DIR, TRITON_CACHE_DIR, INDUCTOR_CACHE_DIR,
+):
+    _d.mkdir(parents=True, exist_ok=True)
+
+(D3_WORK / "colab_cache.py").write_text(__DRAMA3_CACHE_SOURCE__, encoding="utf-8")
+if str(D3_WORK) not in sys.path:
+    sys.path.insert(0, str(D3_WORK))
+from colab_cache import restore_cache, save_cache
+
+CACHE_KEY = f"sglomni-{SGL_OMNI_VER}-py312-{VARIANT}-sm{GPU_ARCH}"
+CACHE_ARCHIVES = Path(DATA_DIR) / "cache-archives"
+CACHE_PAIRS = (
+    (FLASHINFER_CACHE_DIR, FLASHINFER_LEGACY_DIR),
+    (TRITON_CACHE_DIR, TRITON_LEGACY_DIR),
+    (INDUCTOR_CACHE_DIR, INDUCTOR_LEGACY_DIR),
+)
+for _local_c, _legacy_c in CACHE_PAIRS:
+    try:
+        restore_cache(_local_c, _legacy_c, CACHE_ARCHIVES, CACHE_KEY, dlog)
+    except (OSError, ValueError) as err:
+        dlog(f"Cache restore warning ({_local_c.name}): {err}; continuing with local cache")
+
+dlog("Restoring registered voice samples from Drive")
+subprocess.run(["cp", "-rn", f"{DRIVE_VOICES_DIR}/.", f"{SPEAKERS_DIR}/"], check=False)
+dlog(
+    f"GPU: {GPU_NAME} ({GPU_VRAM_MIB} MiB, sm_{GPU_ARCH}) | model={MODEL_REPO} ({VARIANT}) | "
+    f"engine_mem={ENGINE_GPU_MEM} vocoder_mem={VOCODER_GPU_MEM} max_reqs={MAX_RUNNING_REQS} batch_max={BATCH_MAX_ITEMS}"
+)
+
+if not shutil.which("ffmpeg") or not shutil.which("sox"):
+    subprocess.run(
+        "apt-get update -qq && apt-get install -y -qq ffmpeg sox libsox-fmt-all >/dev/null 2>&1",
+        shell=True,
+        check=False,
+    )
+if not shutil.which("uv"):
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "uv"], check=True)
+
+def run_logged(cmd, log_path, env=None, cwd=None, check=True):
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"\n$ {' '.join(str(x) for x in cmd)}\n")
+        f.flush()
+        res = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env, cwd=cwd, text=True)
+    if check and res.returncode != 0:
+        tail = "".join(open(log_path, errors="replace").readlines()[-45:])
+        raise RuntimeError(f"Command failed ({res.returncode}): {' '.join(str(x) for x in cmd[:4])}\n{tail}")
+    return res
+
+def prepare_env():
+    env_log = D3_WORK / "env-setup.log"
+    marker = VENV_DIR / f".ct_drama3_env_{SGL_OMNI_VER}_ready"
+    py_bin = VENV_DIR / "bin" / "python"
+    sgl_bin = VENV_DIR / "bin" / "sgl-omni"
+    if marker.is_file() and py_bin.is_file() and sgl_bin.is_file():
+        dlog(f"Reusing existing sglang-omni=={SGL_OMNI_VER} virtualenv at {VENV_DIR}")
+        return VENV_DIR
+
+    dlog(f"Installing sglang-omni[fishaudio]=={SGL_OMNI_VER} in Python 3.12 venv (log: {env_log})...")
+    uv_bin = shutil.which("uv") or "uv"
+    overrides_file = D3_WORK / "uv-overrides.txt"
+    # descript-audiotools pins protobuf<3.20 while sglang/nvidia-cutlass-dsl requires protobuf>=4.21.12;
+    # sglang-omni upstream pyproject.toml resolves this via override-dependencies protobuf>=6.31.1,<7.0.0.
+    overrides_file.write_text("protobuf>=6.31.1,<7.0.0\n", encoding="utf-8")
+    run_logged([uv_bin, "venv", "--python", "3.12", str(VENV_DIR), "--clear"], env_log)
+    run_logged(
+        [
+            uv_bin, "pip", "install",
+            "--python", str(py_bin),
+            "--prerelease=allow",
+            "--overrides", str(overrides_file),
+            f"sglang-omni[fishaudio]=={SGL_OMNI_VER}",
+            "huggingface_hub",
+            "hf_xet",
+        ],
+        env_log,
+    )
+    run_logged(
+        [str(py_bin), "-c", "import torch, sglang, sglang_omni, dac, audiotools; print('imports-ok', torch.__version__)"],
+        env_log,
+    )
+    marker.write_text(f"{SGL_OMNI_VER}\n", encoding="utf-8")
+    dlog(f"sglang-omni[fishaudio]=={SGL_OMNI_VER} virtualenv ready")
+    return VENV_DIR
+
+def _cleanup_hf_temp():
+    for p in ("/root/.cache/huggingface/xet", "/root/.cache/huggingface/hub"):
+        shutil.rmtree(p, ignore_errors=True)
+    for mp in (MODEL_DIR / ".cache", CODEC_DIR / ".cache"):
+        shutil.rmtree(mp, ignore_errors=True)
+
+def _ensure_default_ref_wav():
+    if DEFAULT_REF_WAV.is_file() and DEFAULT_REF_WAV.stat().st_size > 1024:
+        return
+    drive_copy = DRIVE_VOICES_DIR / "default_ref.wav"
+    if drive_copy.is_file() and drive_copy.stat().st_size > 1024:
+        shutil.copyfile(drive_copy, DEFAULT_REF_WAV)
+        return
+    for ref_url in (
+        "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-TTS-Repo/clone.wav",
+        "https://raw.githubusercontent.com/vllm-project/vllm-omni/main/tests/assets/indextts2/ref_audio.wav",
+    ):
+        try:
+            with urllib.request.urlopen(ref_url, timeout=60) as _src, open(DEFAULT_REF_WAV, "wb") as _dst:
+                shutil.copyfileobj(_src, _dst)
+            if DEFAULT_REF_WAV.is_file() and DEFAULT_REF_WAV.stat().st_size > 1024:
+                break
+        except Exception:
+            pass
+    if not DEFAULT_REF_WAV.is_file() or DEFAULT_REF_WAV.stat().st_size <= 1024:
+        import math, struct, wave
+        sr = 44100
+        n = sr * 3
+        with wave.open(str(DEFAULT_REF_WAV), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            samples = [int(10000 * math.sin(2 * math.pi * 220 * i / sr)) for i in range(n)]
+            wf.writeframes(struct.pack(f"<{n}h", *samples))
+    if not drive_copy.is_file():
+        shutil.copyfile(DEFAULT_REF_WAV, drive_copy)
+
+def prepare_model():
+    dl_log = D3_WORK / "model-download.log"
+    _ensure_default_ref_wav()
+    marker = MODEL_DIR / ".ct_model_ready"
+    codec_file = CODEC_DIR / "codec.pth"
+    has_weights = any(MODEL_DIR.glob("*.safetensors"))
+    if marker.is_file() and (MODEL_DIR / "config.json").is_file() and has_weights and codec_file.is_file():
+        dlog(f"Reusing local SSD model {MODEL_DIR} and codec {codec_file}")
+        return MODEL_DIR
+
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "huggingface_hub", "hf_xet"], check=True)
+    _cleanup_hf_temp()
+    free_gb = shutil.disk_usage("/content").free / 1e9
+    dlog(f"Downloading {MODEL_REPO} + {CODEC_REPO} codec -> local SSD {D3_WORK} (free SSD: {free_gb:.1f} GB; log: {dl_log})...")
+    dl_env = {**os.environ, "HF_XET_CHUNK_CACHE_SIZE_BYTES": "0", "HF_HUB_ENABLE_HF_TRANSFER": "0"}
+    dl_env.pop("HF_XET_HIGH_PERFORMANCE", None)
+    dl_script = r"""
+import shutil, sys
+from pathlib import Path
+from huggingface_hub import hf_hub_download, snapshot_download
+
+repo_id, model_dir, codec_repo, codec_rev, codec_dir = sys.argv[1:6]
+model_path = Path(model_dir)
+codec_path = Path(codec_dir)
+model_path.mkdir(parents=True, exist_ok=True)
+codec_path.mkdir(parents=True, exist_ok=True)
+
+snapshot_download(
+    repo_id=repo_id,
+    local_dir=str(model_path),
+    max_workers=8,
+)
+if not (codec_path / "codec.pth").is_file():
+    hf_hub_download(
+        repo_id=codec_repo,
+        filename="codec.pth",
+        revision=codec_rev,
+        local_dir=str(codec_path),
+    )
+for p in ("/root/.cache/huggingface/xet", "/root/.cache/huggingface/hub"):
+    shutil.rmtree(p, ignore_errors=True)
+for mp in (model_path / ".cache", codec_path / ".cache"):
+    shutil.rmtree(mp, ignore_errors=True)
+"""
+    try:
+        run_logged(
+            [sys.executable, "-c", dl_script, MODEL_REPO, str(MODEL_DIR), CODEC_REPO, CODEC_REVISION, str(CODEC_DIR)],
+            dl_log,
+            env=dl_env,
+        )
+    finally:
+        _cleanup_hf_temp()
+
+    if not (MODEL_DIR / "config.json").is_file() or not any(MODEL_DIR.glob("*.safetensors")) or not codec_file.is_file():
+        raise RuntimeError(f"Model/codec download incomplete in {MODEL_DIR} / {CODEC_DIR}")
+    marker.write_text(MODEL_REPO + "\n", encoding="utf-8")
+    total_gb = (
+        sum(p.stat().st_size for p in MODEL_DIR.rglob("*") if p.is_file())
+        + codec_file.stat().st_size
+    ) / 1e9
+    dlog(f"Drama 3 weights + S2-Pro codec ready on local SSD ({total_gb:.2f} GB)")
+    return MODEL_DIR
+
+with ThreadPoolExecutor(max_workers=2) as pool:
+    f_env = pool.submit(prepare_env)
+    f_mod = pool.submit(prepare_model)
+    while not (f_env.done() and f_mod.done()):
+        for fut in (f_env, f_mod):
+            if fut.done() and fut.exception():
+                raise fut.exception()
+        free_gb = shutil.disk_usage("/content").free / 1e9
+        dlog(
+            f"Setup heartbeat | env={'done' if f_env.done() else 'running'} "
+            f"model={'done' if f_mod.done() else 'running'} | free_ssd={free_gb:.1f} GB"
+        )
+        time.sleep(25)
+    VENV_DIR = f_env.result()
+    MODEL_DIR = f_mod.result()
+
+dlog(f"Setup complete: venv={VENV_DIR} model={MODEL_DIR} codec={CODEC_DIR} drive_data={DATA_DIR}")
+'''.replace("__DRAMA3_CACHE_SOURCE__", repr((ROOT / "templates/colab_cache.py").read_text()))
+
+DRAMA3_SERVICE = r'''# @title 2. Service -- SGLang-Omni Fish Audio Drama 3 on 127.0.0.1:8000 (Bearer Auth + Drive Voices & Batch TTS)
+(D3_WORK / "colab_asgi_common.py").write_text(__DRAMA3_COMMON_SOURCE__, encoding="utf-8")
+(D3_WORK / "ct_drama3_middleware.py").write_text(__DRAMA3_MW_SOURCE__, encoding="utf-8")
+
+SGL_ENV = {
+    "PATH": f"{VENV_DIR}/bin:/usr/local/cuda/bin:{os.environ.get('PATH', '')}",
+    "PYTHONPATH": f"{D3_WORK}:{os.environ.get('PYTHONPATH', '')}",
+    "VIRTUAL_ENV": str(VENV_DIR),
+    "FLASHINFER_DISABLE_VERSION_CHECK": "1",
+    "FLASHINFER_WORKSPACE_BASE": str(FLASHINFER_CACHE_DIR),
+    "TRITON_CACHE_DIR": str(TRITON_CACHE_DIR),
+    "TORCHINDUCTOR_CACHE_DIR": str(INDUCTOR_CACHE_DIR),
+    "SPEAKER_SAMPLES_DIR": str(SPEAKERS_DIR),
+    "CT_API_TOKEN": API_TOKEN,
+    "CT_SERVICE_PORT": str(SERVICE_PORT),
+    "CT_DATA_DIR": str(DATA_DIR),
+    "CT_DRAMA3_MODEL": MODEL_REPO,
+    "CT_DRAMA3_ALIAS": MODEL_ALIAS,
+    "CT_DRAMA3_MAX_REF_SEC": str(MAX_REF_SEC),
+    "CT_DEFAULT_REF_WAV": str(DEFAULT_REF_WAV),
+    "CT_DEFAULT_REF_TEXT": DEFAULT_REF_TEXT,
+}
+
+SERVER_ARGS = [
+    str(VENV_DIR / "bin" / "python"),
+    str(D3_WORK / "ct_drama3_middleware.py"),
+    "serve",
+    "--model-path", str(MODEL_DIR),
+    "--host", "127.0.0.1",
+    "--port", str(SERVICE_PORT),
+    "--model-name", MODEL_REPO,
+    "--allowed-local-media-path", str(D3_WORK),
+    "--tts-batch-max-items", str(BATCH_MAX_ITEMS),
+    "--tts_engine.gpu_memory_fraction", str(ENGINE_GPU_MEM),
+    "--vocoder.gpu_memory_fraction", str(VOCODER_GPU_MEM),
+    "--vocoder.factory.codec_path", str(CODEC_DIR),
+    "--tts_engine.factory.max_running_requests", str(MAX_RUNNING_REQS),
+    "--tts_engine.factory.context_length", str(CONTEXT_LENGTH),
+    "--preprocessing.factory.max_reference_audio_seconds", str(MAX_REF_SEC),
+]
+
+def start_service():
+    subprocess.run(["pkill", "-9", "-f", "ct_drama3_middleware|sglang_omni"], check=False)
+    time.sleep(1)
+    dlog(f"Starting SGLang-Omni Drama 3 server on 127.0.0.1:{SERVICE_PORT} (model={MODEL_REPO})")
+    return ct_spawn("service", SERVER_ARGS, env=SGL_ENV, cwd=str(D3_WORK))
+
+PROCS["service"] = (start_service(), start_service)
+'''.replace(
+    "__DRAMA3_COMMON_SOURCE__", repr((ROOT / "templates/colab_asgi_common.py").read_text())).replace(
+    "__DRAMA3_MW_SOURCE__", repr((ROOT / "templates/drama3_middleware.py").read_text()))
+
+DRAMA3_KEEPALIVE = r'''# @title 5. Ready + keep-alive -- wait for CUDA graph capture, verify auth, register default voice, warmup & sync caches
+BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+
+def http_json(url, key=None, payload=None, timeout=30):
+    headers = {"Content-Type": "application/json", "User-Agent": BROWSER_UA}
+    if key is not None:
+        headers["Authorization"] = "Bearer " + key
+    req = urllib.request.Request(
+        url, headers=headers, data=None if payload is None else json.dumps(payload).encode("utf-8")
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            return resp.status, (json.loads(raw) if raw.strip().startswith(("{", "[")) else {})
+    except urllib.error.HTTPError as err:
+        return err.code, {}
+
+def auth_check(base, key):
+    for candidate, expected in ((None, 401), ("invalid-token-probe", 401), (key, 200)):
+        code, _ = http_json(base + "/v1/models", candidate)
+        if code != expected:
+            raise RuntimeError(f"Auth test failed on {base}/v1/models: expected {expected}, got {code}")
+
+LOCAL_BASE = f"http://127.0.0.1:{SERVICE_PORT}"
+deadline = time.monotonic() + 2400
+last_notice = 0
+while time.monotonic() < deadline:
+    proc = PROCS["service"][0]
+    if proc.poll() is not None:
+        raise RuntimeError("SGLang-Omni Drama 3 exited during startup:\n" + ct_tail("service", 90))
+    try:
+        code, _ = http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)
+        if code == 200:
+            break
+    except Exception:
+        pass
+    if time.monotonic() - last_notice >= 25:
+        gpu_stat = ct_gpu_stat()
+        last_line = (ct_tail("service", 3).strip().splitlines() or ["starting..."])[-1]
+        dlog(f"Waiting for Drama 3 pipeline & CUDA graphs | GPU: {gpu_stat} | {last_line[:100]}")
+        last_notice = time.monotonic()
+    time.sleep(5)
+else:
+    raise RuntimeError("Timed out waiting for SGLang-Omni Drama 3 server to become ready:\n" + ct_tail("service", 90))
+
+auth_check(LOCAL_BASE, API_TOKEN)
+
+# Register default 'alloy' voice preset if not yet saved
+code, voices_data = http_json(LOCAL_BASE + "/v1/audio/voices", API_TOKEN, timeout=20)
+existing_voices = set(voices_data.get("voices") or [])
+for preset_voice in ("alloy",):
+    if preset_voice not in existing_voices and DEFAULT_REF_WAV.is_file():
+        v_code, _ = http_json(
+            LOCAL_BASE + "/api/ct/drive-upload-voice",
+            API_TOKEN,
+            payload={
+                "name": preset_voice,
+                "use_default_ref": True,
+                "consent": "builtin-default-reference",
+                "speaker_description": "Default English reference voice for Fish Audio Drama 3",
+            },
+            timeout=90,
+        )
+        dlog(f"Registered preset voice '{preset_voice}': HTTP {v_code}")
+
+# Warmup synthesis to populate Triton/FlashInfer JIT kernels before saving cache archives
+warmup_req = urllib.request.Request(
+    LOCAL_BASE + "/v1/audio/speech",
+    headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_TOKEN}"},
+    data=json.dumps({
+        "model": MODEL_REPO,
+        "input": "Hello, the Fish Audio Drama 3 speech service is ready.",
+        "response_format": "wav",
+        "max_new_tokens": 384,
+    }, ensure_ascii=False).encode("utf-8"),
+)
+try:
+    with urllib.request.urlopen(warmup_req, timeout=180) as wresp:
+        wav_bytes = wresp.read()
+        dlog(f"Warmup synthesis succeeded ({len(wav_bytes):,} bytes 44.1 kHz WAV)")
+except Exception as werr:
+    dlog(f"Warmup synthesis warning: {werr}")
+
+for _local_c, _legacy_c in CACHE_PAIRS:
+    try:
+        save_cache(_local_c, CACHE_ARCHIVES, CACHE_KEY, dlog)
+    except (OSError, ValueError) as err:
+        dlog(f"Cache archive save warning ({_local_c.name}): {err}")
+subprocess.run(["cp", "-ru", f"{SPEAKERS_DIR}/.", f"{DRIVE_VOICES_DIR}/"], check=False)
+
+ct_public_gate(
+    PUBLIC_URL,
+    lambda: http_json(PUBLIC_URL + "/v1/models", API_TOKEN, timeout=15)[0],
+    lambda: auth_check(PUBLIC_URL, API_TOKEN),
+    dlog,
+    timeout=180,
+    interval=8,
+)
+dlog(f"Public endpoint verified: {PUBLIC_URL}/v1/models")
+
+print(f"{SERVICE} is up: {PUBLIC_URL} (model={MODEL_REPO})")
+print("CT_READY", flush=True)
+
+ct_watchdog(
+    lambda: http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200,
+    start_service,
+    dlog,
+    heartbeat=lambda up: dlog(f"heartbeat | up={up}s | GPU: {ct_gpu_stat()}"),
+)
+'''
+
+# --------------------------------------------------------------------------- tangoflux (T4 / L4 / G4 · 44.1 kHz Stereo Text-to-Audio / Sound Effect Generation)
+TANGOFLUX_CFG = dict(
+    name="tangoflux",
+    service_port=8000,
+    auth="builtin",
+    public_port=8000,
+    health_path="/health",
+    ready_timeout=2400,
+)
+
+TANGOFLUX_SETUP = r'''# @title 1. Setup -- install TangoFlux + stage weights & Flan-T5-Large on local NVMe SSD
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+VARIANT_REPOS = {
+    "crpo": "declare-lab/TangoFlux",
+    "default": "declare-lab/TangoFlux",
+    "tangoflux": "declare-lab/TangoFlux",
+    "base": "declare-lab/TangoFlux-base",
+    "tangoflux-base": "declare-lab/TangoFlux-base",
+}
+TANGOFLUX_GIT_URL = "https://github.com/declare-lab/TangoFlux.git"
+
+def tflog(msg):
+    print(time.strftime("[%F %T] [tangoflux] ") + msg, flush=True)
+
+_gpu_raw = ct_gpu_stat("name,memory.total,compute_cap").splitlines()[0]
+_gpu_parts = [p.strip() for p in _gpu_raw.split(",")]
+GPU_NAME = _gpu_parts[0]
+_vram_tok = _gpu_parts[1].split()[0] if len(_gpu_parts) > 1 and _gpu_parts[1].strip() else ""
+GPU_VRAM_MIB = int(float(_vram_tok)) if _vram_tok.replace(".", "", 1).isdigit() else 0
+GPU_ARCH = (_gpu_parts[2] if len(_gpu_parts) > 2 else "7.5").replace(".", "")
+
+RAW_VARIANT = os.environ.get("CT_TANGOFLUX_VARIANT", "crpo").strip().lower()
+EXPLICIT_MODEL = os.environ.get("CT_TANGOFLUX_MODEL", "").strip()
+if EXPLICIT_MODEL:
+    MODEL_REPO = EXPLICIT_MODEL
+    VARIANT = "base" if "base" in EXPLICIT_MODEL.lower() else "crpo"
+elif RAW_VARIANT in VARIANT_REPOS:
+    MODEL_REPO = VARIANT_REPOS[RAW_VARIANT]
+    VARIANT = "base" if "base" in RAW_VARIANT else "crpo"
+else:
+    MODEL_REPO = "declare-lab/TangoFlux"
+    VARIANT = "crpo"
+
+MODEL_ALIAS = os.environ.get("CT_TANGOFLUX_ALIAS", "tangoflux").strip() or "tangoflux"
+
+TF_WORK = Path("/content/tangoflux")
+VENV_DIR = TF_WORK / "venv"
+SRC_DIR = TF_WORK / "src"
+MODELS_ROOT = TF_WORK / "models"
+MODEL_DIR = MODELS_ROOT / MODEL_REPO.split("/")[-1]
+TEXT_ENCODER_DIR = MODELS_ROOT / "flan-t5-large"
+DRIVE_OUTPUT_DIR = Path(DATA_DIR) / "outputs"
+
+TRITON_CACHE_DIR = TF_WORK / "triton-cache"
+INDUCTOR_CACHE_DIR = TF_WORK / "inductor-cache"
+TRITON_LEGACY_DIR = Path(DATA_DIR) / "triton-cache"
+INDUCTOR_LEGACY_DIR = Path(DATA_DIR) / "inductor-cache"
+
+for _d in (TF_WORK, MODELS_ROOT, DRIVE_OUTPUT_DIR, TRITON_CACHE_DIR, INDUCTOR_CACHE_DIR):
+    _d.mkdir(parents=True, exist_ok=True)
+
+(TF_WORK / "colab_cache.py").write_text(__TANGOFLUX_CACHE_SOURCE__, encoding="utf-8")
+if str(TF_WORK) not in sys.path:
+    sys.path.insert(0, str(TF_WORK))
+from colab_cache import restore_cache, save_cache
+
+CACHE_KEY = f"tangoflux-diffusers0303-py{sys.version_info.major}{sys.version_info.minor}-sm{GPU_ARCH}"
+CACHE_ARCHIVES = Path(DATA_DIR) / "cache-archives"
+CACHE_PAIRS = (
+    (TRITON_CACHE_DIR, TRITON_LEGACY_DIR),
+    (INDUCTOR_CACHE_DIR, INDUCTOR_LEGACY_DIR),
+)
+for _local_c, _legacy_c in CACHE_PAIRS:
+    try:
+        restore_cache(_local_c, _legacy_c, CACHE_ARCHIVES, CACHE_KEY, tflog)
+    except (OSError, ValueError) as err:
+        tflog(f"Cache restore warning ({_local_c.name}): {err}")
+
+tflog(f"GPU: {GPU_NAME} ({GPU_VRAM_MIB} MiB, sm_{GPU_ARCH}) | model={MODEL_REPO} ({VARIANT})")
+
+if not shutil.which("ffmpeg"):
+    subprocess.run(
+        "apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null 2>&1",
+        shell=True,
+        check=False,
+    )
+if not shutil.which("uv"):
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-U", "uv"], check=True)
+
+def run_logged(cmd, log_path, env=None, cwd=None, check=True):
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"\n$ {' '.join(str(x) for x in cmd)}\n")
+        f.flush()
+        res = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env, cwd=cwd, text=True, timeout=900)
+    if check and res.returncode != 0:
+        tail = "".join(open(log_path, errors="replace").readlines()[-45:])
+        raise RuntimeError(f"Command failed ({res.returncode}): {' '.join(str(x) for x in cmd[:4])}\n{tail}")
+    return res
+
+def prepare_env():
+    env_log = TF_WORK / "env-setup.log"
+    marker = VENV_DIR / ".ct_tangoflux_env_v2_ready"
+    py_bin = VENV_DIR / "bin" / "python"
+    if marker.is_file() and py_bin.is_file():
+        tflog(f"Reusing existing TangoFlux virtualenv at {VENV_DIR}")
+        return py_bin
+
+    if (SRC_DIR / ".git").is_dir():
+        run_logged(["git", "-C", str(SRC_DIR), "pull", "--ff-only"], env_log, check=False)
+    else:
+        shutil.rmtree(SRC_DIR, ignore_errors=True)
+        run_logged(["git", "clone", "--depth", "1", TANGOFLUX_GIT_URL, str(SRC_DIR)], env_log)
+
+    tflog(f"Creating TangoFlux venv inheriting Colab PyTorch (log: {env_log})...")
+    uv_bin = shutil.which("uv") or "uv"
+    run_logged([uv_bin, "venv", "--system-site-packages", str(VENV_DIR), "--clear"], env_log)
+    if subprocess.run([str(py_bin), "-c", "import torch"], check=False).returncode != 0:
+        run_logged([uv_bin, "pip", "install", "--python", str(py_bin), "torch"], env_log)
+    run_logged(
+        [
+            uv_bin, "pip", "install",
+            "--python", str(py_bin),
+            "diffusers==0.30.3",
+            "transformers>=4.44.2,<4.50.0",
+            "safetensors>=0.4.3",
+            "huggingface_hub>=0.25.0",
+            "hf_xet",
+            "sentencepiece>=0.2.0",
+            "protobuf>=4.25.0,<7.0.0",
+            "psutil",
+            "packaging",
+            "pyyaml",
+            "tqdm",
+            "uvicorn>=0.30.0",
+            "starlette>=0.38.0",
+        ],
+        env_log,
+    )
+    run_logged(
+        [uv_bin, "pip", "install", "--python", str(py_bin), "--no-deps", "accelerate>=0.34.2", str(SRC_DIR)],
+        env_log,
+    )
+    check_env = dict(os.environ)
+    check_env.update({"USE_TF": "0", "USE_FLAX": "0", "TRANSFORMERS_NO_TF": "1", "TRANSFORMERS_NO_FLAX": "1"})
+    run_logged(
+        [
+            str(py_bin), "-c",
+            "import importlib.machinery, sys, types\n"
+            "try:\n"
+            "    import datasets\n"
+            "except ImportError:\n"
+            "    _s = types.ModuleType('datasets')\n"
+            "    _s.__spec__ = importlib.machinery.ModuleSpec('datasets', loader=None)\n"
+            "    _s.load_dataset = None; _s.Audio = None\n"
+            "    sys.modules['datasets'] = _s\n"
+            "import torch, diffusers, transformers\n"
+            "from tangoflux.model import TangoFlux\n"
+            "print('imports-ok', torch.__version__, 'cuda=', torch.cuda.is_available(), diffusers.__version__)",
+        ],
+        env_log,
+        env=check_env,
+    )
+    marker.write_text("v2\n", encoding="utf-8")
+    tflog("TangoFlux virtualenv ready")
+    return py_bin
+
+def _cleanup_hf_temp():
+    for p in ("/root/.cache/huggingface/xet", "/root/.cache/huggingface/hub"):
+        shutil.rmtree(p, ignore_errors=True)
+    for mp in (MODEL_DIR / ".cache", TEXT_ENCODER_DIR / ".cache"):
+        shutil.rmtree(mp, ignore_errors=True)
+
+def stage_models(py_bin):
+    dl_env = dict(os.environ)
+    dl_env["HF_XET_CHUNK_CACHE_SIZE_BYTES"] = "0"
+    dl_env["HF_HUB_DISABLE_TELEMETRY"] = "1"
+
+    def _stage_main():
+        if (MODEL_DIR / "tangoflux.safetensors").is_file() and (MODEL_DIR / "vae.safetensors").is_file():
+            tflog(f"Reusing local SSD TangoFlux weights at {MODEL_DIR}")
+            return
+        tflog(f"Downloading {MODEL_REPO} -> {MODEL_DIR} ...")
+        subprocess.run(
+            [
+                str(py_bin), "-c",
+                "import os; from huggingface_hub import snapshot_download; "
+                f"snapshot_download(repo_id={MODEL_REPO!r}, local_dir={str(MODEL_DIR)!r}, "
+                "allow_patterns=['config.json', 'tangoflux.safetensors', 'vae.safetensors'])",
+            ],
+            env=dl_env,
+            check=True,
+            timeout=1800,
+        )
+
+    def _stage_t5():
+        if (TEXT_ENCODER_DIR / "model.safetensors").is_file() and (TEXT_ENCODER_DIR / "spiece.model").is_file():
+            tflog(f"Reusing local SSD Flan-T5-Large weights at {TEXT_ENCODER_DIR}")
+            return
+        tflog(f"Downloading google/flan-t5-large (safetensors only) -> {TEXT_ENCODER_DIR} ...")
+        subprocess.run(
+            [
+                str(py_bin), "-c",
+                "from huggingface_hub import snapshot_download; "
+                f"snapshot_download(repo_id='google/flan-t5-large', local_dir={str(TEXT_ENCODER_DIR)!r}, "
+                "allow_patterns=['*.json', 'spiece.model', 'model.safetensors'])",
+            ],
+            env=dl_env,
+            check=True,
+            timeout=1800,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_main = pool.submit(_stage_main)
+        f_t5 = pool.submit(_stage_t5)
+        f_main.result()
+        f_t5.result()
+    _cleanup_hf_temp()
+
+PY_BIN = prepare_env()
+stage_models(PY_BIN)
+TF_SETUP_OK = True
+tflog("Setup complete")
+'''.replace("__TANGOFLUX_CACHE_SOURCE__", repr((ROOT / "templates/colab_cache.py").read_text(encoding="utf-8")))
+
+TANGOFLUX_SERVICE = r'''# @title 2. Service -- launch authenticated TangoFlux ASGI server on 127.0.0.1
+from pathlib import Path
+if not globals().get("TF_SETUP_OK"):
+    raise RuntimeError("TangoFlux setup cell failed before completing model staging; check setup traceback above.")
+
+(TF_WORK / "colab_asgi_common.py").write_text(__TANGOFLUX_ASGI_COMMON_SOURCE__, encoding="utf-8")
+(TF_WORK / "tangoflux_server.py").write_text(__TANGOFLUX_SERVER_SOURCE__, encoding="utf-8")
+
+def start_service():
+    if not API_TOKEN:
+        raise RuntimeError("CT_API_TOKEN is empty; refusing to start unauthenticated TangoFlux server")
+    if "service" in PROCS:
+        ct_stop_proc(PROCS["service"][0])
+    subprocess.run(["pkill", "-9", "-f", "tangoflux_server.py"], check=False)
+    time.sleep(1)
+    svc_env = dict(os.environ)
+    svc_env.update({
+        "CT_API_TOKEN": API_TOKEN,
+        "CT_SERVICE_PORT": str(SERVICE_PORT),
+        "CT_DATA_DIR": str(DATA_DIR),
+        "CT_TANGOFLUX_SERVED_MODEL": MODEL_REPO,
+        "CT_TANGOFLUX_ALIAS": MODEL_ALIAS,
+        "CT_TANGOFLUX_VARIANT": VARIANT,
+        "CT_TANGOFLUX_MODEL_DIR": str(MODEL_DIR),
+        "CT_TANGOFLUX_TEXT_ENCODER_DIR": str(TEXT_ENCODER_DIR),
+        "TRITON_CACHE_DIR": str(TRITON_CACHE_DIR),
+        "TORCHINDUCTOR_CACHE_DIR": str(INDUCTOR_CACHE_DIR),
+        "USE_TF": "0",
+        "USE_FLAX": "0",
+        "TRANSFORMERS_NO_TF": "1",
+        "TRANSFORMERS_NO_FLAX": "1",
+        "PYTHONPATH": f"{TF_WORK}:{svc_env.get('PYTHONPATH', '')}".rstrip(":"),
+    })
+    proc = ct_spawn(
+        "service",
+        [str(VENV_DIR / "bin" / "python"), str(TF_WORK / "tangoflux_server.py")],
+        env=svc_env,
+        cwd=str(TF_WORK),
+    )
+    PROCS["service"] = (proc, start_service)
+    return proc
+
+start_service()
+tflog(f"Spawned TangoFlux server (pid={PROCS['service'][0].pid}) on 127.0.0.1:{SERVICE_PORT}")
+'''.replace(
+    "__TANGOFLUX_ASGI_COMMON_SOURCE__", repr((ROOT / "templates/colab_asgi_common.py").read_text(encoding="utf-8"))
+).replace(
+    "__TANGOFLUX_SERVER_SOURCE__", repr((ROOT / "templates/tangoflux_server.py").read_text(encoding="utf-8"))
+)
+
+TANGOFLUX_KEEPALIVE = r'''# @title 5. Readiness gate, warmup SFX generation, cache archiving & watchdog
+import urllib.error
+import urllib.request
+if not globals().get("TF_SETUP_OK") or "service" not in PROCS:
+    raise RuntimeError("TangoFlux service did not start because an earlier notebook cell failed; see traceback above.")
+
+def http_json(url, token="", payload=None, timeout=20):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8", errors="replace")
+            return r.status, (json.loads(body) if body.strip().startswith("{") else {})
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+
+def auth_check(base, token):
+    for candidate, expected in (("", 401), ("invalid-probe-token", 401), (token, 200)):
+        code, _ = http_json(base + "/v1/models", candidate)
+        if code != expected:
+            raise RuntimeError(f"Auth test failed on {base}/v1/models: expected {expected}, got {code}")
+
+LOCAL_BASE = f"http://127.0.0.1:{SERVICE_PORT}"
+deadline = time.monotonic() + 1800
+last_notice = 0
+while time.monotonic() < deadline:
+    proc = PROCS["service"][0]
+    if proc.poll() is not None:
+        raise RuntimeError("TangoFlux server exited during startup:\n" + ct_tail("service", 90))
+    try:
+        code, _ = http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)
+        if code == 200:
+            break
+    except Exception:
+        pass
+    if time.monotonic() - last_notice >= 20:
+        last_line = (ct_tail("service", 3).strip().splitlines() or ["loading weights..."])[-1]
+        tflog(f"Waiting for TangoFlux server | GPU: {ct_gpu_stat()} | {last_line[:100]}")
+        last_notice = time.monotonic()
+    time.sleep(4)
+else:
+    raise RuntimeError("Timed out waiting for TangoFlux server to become ready:\n" + ct_tail("service", 90))
+
+auth_check(LOCAL_BASE, API_TOKEN)
+
+# Warmup generation to compile/cache CUDA & Triton kernels before opening public gate
+warmup_req = urllib.request.Request(
+    LOCAL_BASE + "/api/ct/generate",
+    headers={"Content-Type": "application/json", "Authorization": f"Bearer {API_TOKEN}"},
+    data=json.dumps({
+        "prompt": "Gentle rain falling on wooden roof",
+        "duration": 2.0,
+        "steps": 10,
+        "guidance_scale": 4.5,
+        "seed": 0,
+        "response_format": "wav",
+    }).encode("utf-8"),
+)
+try:
+    with urllib.request.urlopen(warmup_req, timeout=180) as wresp:
+        wav_bytes = wresp.read()
+        tflog(f"Warmup SFX generation succeeded ({len(wav_bytes):,} bytes 44.1 kHz stereo WAV)")
+except Exception as werr:
+    tflog(f"Warmup SFX generation warning: {werr}")
+
+for _local_c, _legacy_c in CACHE_PAIRS:
+    try:
+        save_cache(_local_c, CACHE_ARCHIVES, CACHE_KEY, tflog)
+    except (OSError, ValueError) as err:
+        tflog(f"Cache archive save warning ({_local_c.name}): {err}")
+
+ct_public_gate(
+    PUBLIC_URL,
+    lambda: http_json(PUBLIC_URL + "/v1/models", API_TOKEN, timeout=15)[0],
+    lambda: auth_check(PUBLIC_URL, API_TOKEN),
+    tflog,
+    timeout=180,
+    interval=8,
+)
+tflog(f"Public endpoint verified: {PUBLIC_URL}/v1/models")
+
+print(f"{SERVICE} is up: {PUBLIC_URL} (model={MODEL_REPO})")
+print("CT_READY", flush=True)
+
+ct_watchdog(
+    lambda: http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200,
+    start_service,
+    tflog,
+    heartbeat=lambda up: tflog(f"heartbeat | up={up}s | GPU: {ct_gpu_stat()}"),
+)
+'''
+
 if __name__ == "__main__":
+    write(ROOT / "src/colabllm/services/tangoflux.ipynb",
+          notebook("TangoFlux (T4 / L4 / G4 · 44.1 kHz Stereo Text-to-Audio & Sound Effect Generation)",
+                   "Serves `declare-lab/TangoFlux` (CRPO preference-optimized 515M FluxTransformer + Flan-T5-Large + "
+                   "AutoencoderOobleck VAE, or `declare-lab/TangoFlux-base` via `--variant base`) on a Colab T4 GPU by "
+                   "default (also fast on L4/G4/A100), generating 1–30s 44.1 kHz stereo sound effects, ambient audio, "
+                   "and musical cues with fail-closed Bearer token auth, single & batch SFX endpoints, and Google Drive "
+                   "output persistence.",
+                   TANGOFLUX_CFG, TANGOFLUX_SETUP, TANGOFLUX_SERVICE,
+                   keepalive=TANGOFLUX_KEEPALIVE))
+    write(ROOT / "src/colabllm/services/drama3.ipynb",
+          notebook("Fish Audio Drama 3 (G4 / H100 / A100 · SGLang-Omni Zero-Shot Multi-Ref TTS & Novel Narration)",
+                   "Serves `fishaudio/drama-3` (BF16 on G4 / H100 / A100-80GB) or `fishaudio/drama-3-int4` "
+                   "(auto-selected on <72 GiB GPUs or via `--variant int4`) through `sglang-omni[fishaudio]==0.2.0` "
+                   "(3-stage `preprocessing` -> `tts_engine` -> `vocoder`, 44.1 kHz mono output, ~22x aggregate "
+                   "realtime throughput on G4) with fail-closed Bearer token auth, multi-reference voice cloning, "
+                   "expressive inline event tags (`[sighs]`, `[laughs]`), `/v1/audio/speech/batch` novel narration, "
+                   "and persistent Google Drive voices/outputs.",
+                   DRAMA3_CFG, DRAMA3_SETUP, DRAMA3_SERVICE,
+                   keepalive=DRAMA3_KEEPALIVE))
     write(ROOT / "src/colabllm/services/deepseek-coder.ipynb",
           notebook("DeepSeek-V4.1-Flash-1017 Uncensored GSQ-RCO Coder (G4 / H100 / A100 · Auto Max Context up to 1M + Vision)",
                    "Serves `Abiray/DeepSeek-V4.1-Flash-1017-Uncensored-GSQ-RCO-Coder-GGUF` (50% expert-pruned 192-expert "
@@ -4411,12 +5499,21 @@ if __name__ == "__main__":
                    "Unsloth_Studio_Colab.ipynb -- built-in login, our own cloudflared (quick or fixed domain).",
                    UNSLOTH_CFG, UNSLOTH_SETUP, UNSLOTH_SERVICE, keepalive=UNSLOTH_KEEPALIVE))
     write(ROOT / "src/colabllm/services/qwen-flash.ipynb",
-          notebook("Qwen3.8-Flash-Next (G4 / 800K / Vision)",
-                   "Runs `SC117/Qwen3.8-Flash-Next-GSQ-RCO-"
-                   "abliterated-GGUF` (IQ3_S, 819200 context with YaRN 3.125x, BF16 vision projector, "
-                   "`--load-mode none --lazy-mode off`) on a Colab G4 (RTX PRO 6000 Blackwell sm_120) with "
-                   "`llama-server --api-key-file` authentication.",
+          notebook("Qwen3.8-Flash-Next (G4 · UD-Q4_K_XL-V2 · 1M Context · q8_0 KV + BF16 Vision)",
+                   "Serves `huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-v2-GGUF` (`unsloth-UD-Q4_K_XL-V2` "
+                   "calibrated 4-bit MoE, 1,048,576 1M context via YaRN 4.0x + `q8_0` KV/QSA k-pool cache, "
+                   "26.82 GiB 3-gram PLE table in DDR5 host RAM via `--load-mode none --lazy-mode off --no-host`, "
+                   "hardware-adaptive `--n-cpu-moe` (`3/48` layers on G4), and `mmproj-Qwen3.8-Flash-Next-BF16.gguf` "
+                   "vision projector) on a Colab G4 (RTX PRO 6000 Blackwell sm_120) with `llama-server --api-key-file`.",
                    QWEN_FLASH_CFG, QWEN_FLASH_SETUP, QWEN_FLASH_SERVICE, keepalive=QWEN_FLASH_KEEPALIVE))
+    write(ROOT / "src/colabllm/services/deepseek-qwen-9b.ipynb",
+          notebook("DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic (L4 Default / T4 · i1-Q4_K_M + Native MTP · 256K Context + F16 Vision)",
+                   "Serves `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic` GGUF (`i1-Q4_K_M` 5.24 GiB imatrix "
+                   "4-bit default, native Multi-Token Prediction `mtp-Q8_0.gguf` draft sidecar via `--spec-type draft-mtp`, "
+                   "`mmproj-f16.gguf` multimodal vision projector, and full native 262,144 256K context with `q8_0` KV cache) "
+                   "on a Colab L4 GPU by default via `llama-server --api-key-file`.",
+                   DEEPSEEK_QWEN_9B_CFG, DEEPSEEK_QWEN_9B_SETUP, DEEPSEEK_QWEN_9B_SERVICE,
+                   keepalive=DEEPSEEK_QWEN_9B_KEEPALIVE))
     write(ROOT / "src/colabllm/services/nemotron-transcribe.ipynb",
           notebook("NVIDIA-Nemotron-3.5-Transcribe-30B-A4B (G4 / vLLM + NeMo Speech)",
                    "Serves `nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B` (BF16 / FP8 / NVFP4, 65536 context, "

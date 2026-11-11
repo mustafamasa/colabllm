@@ -33,10 +33,11 @@ DOCS_URL = 'https://github.com/deluxebear/colabllm/blob/master/docs/{}.md'
 GPUS = ('T4', 'L4', 'G4', 'A100', 'H100', 'none')
 SECRET_KEYS = ('auth_user', 'auth_pass', 'api_token', 'login_user', 'login_pass')
 CATEGORIES = {
-    'ollama': 'LLM', 'deepseek-coder': 'LLM', 'qwen-flash': 'LLM',
+    'ollama': 'LLM', 'deepseek-coder': 'LLM', 'qwen-flash': 'LLM', 'deepseek-qwen-9b': 'LLM',
     'comfyui': 'Image', 'flux-klein': 'Image', 'qwen-image': 'Image',
     'longcat-avatar': 'Video', 'longcat-video': 'Video', 'openjutsu': 'Video',
     'indextts': 'Audio', 'qwen3-tts': 'Audio', 'nemotron-transcribe': 'Audio',
+    'drama3': 'Audio', 'tangoflux': 'Audio',
     'unlimited-ocr': 'Document', 'unsloth-studio': 'Training',
 }
 CONTENT_TYPES = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',

@@ -19,6 +19,7 @@ Grounded in https://docs.ollama.com/:
     `--origins`, `--no-cloud`, `--models-storage` (`ssd`/`drive`), and `--ollama-env KEY=VALUE`.
 
 Usage:
+  colabllm ollama up --preset huihui-27b --domain     # Huihui Qwen3.8-27B BF16 + 262K context on G4, one flag
   colabllm ollama up --models qwen3:8b
   colabllm ollama up --models qwen2.5-coder:7b --alias claude-3-5-sonnet=qwen2.5-coder:7b --compat openai,anthropic --profile coding
   colabllm ollama up --gpu L4 --models gemma4:e4b,nomic-embed-text --context-length 32768 --kv-cache-type q8_0 --keep-alive -1
@@ -68,6 +69,7 @@ from ollama_runtime import (  # noqa: E402
     DEFAULT_MODEL,
     KV_CACHE_TYPES,
     MODELS_STORAGE_MODES,
+    MODEL_PRESETS,
     OPTIMIZATION_PROFILES,
     build_ollama_server_env,
     compat_endpoints_info,
@@ -95,6 +97,7 @@ SERVICE = Service(
 )
 
 _BASE_ENV = dict(SERVICE.env)
+_BASE_GPU = SERVICE.gpu
 
 
 def _add_endpoint_args(parser: argparse.ArgumentParser, *, include_timeout: bool = True) -> None:
@@ -540,6 +543,11 @@ def configure_cli(parser: argparse.ArgumentParser, commands: Any, up: argparse.A
     # 1. Model download, aliases, storage & warmup options on `up`
     model_grp = up.add_argument_group("Ollama model & storage options")
     model_grp.add_argument(
+        "--preset", choices=tuple(MODEL_PRESETS), default=None,
+        help="one-flag model preset (GPU + models + alias + server tuning; explicit flags override). "
+        + "; ".join(f"{name}: {spec['description']}" for name, spec in MODEL_PRESETS.items()),
+    )
+    model_grp.add_argument(
         "--models", "--model", "-m", action="append",
         help=f"models to auto-download at startup (default: {DEFAULT_MODEL}); repeat or comma-separate, supports hf.co/<org>/<repo>:<quant>",
     )
@@ -729,16 +737,29 @@ def prepare_up(args: Any) -> None:
     # Reset to baseline defaults on every call so overrides never leak across invocations.
     SERVICE.env.clear()
     SERVICE.env.update(_BASE_ENV)
+    SERVICE.gpu = _BASE_GPU
+
+    preset_name = getattr(args, "preset", None)
+    preset = MODEL_PRESETS.get(preset_name, {}) if preset_name else {}
+    if preset_name and not preset:
+        raise ValueError(f"Unknown model preset {preset_name!r}; choices: {', '.join(MODEL_PRESETS)}")
+    if preset.get("gpu") and getattr(args, "gpu", None) is None:
+        SERVICE.gpu = preset["gpu"]
 
     raw_models = getattr(args, "models", None)
     no_models = bool(getattr(args, "no_models", False))
+    if raw_models is None and not no_models and preset.get("models"):
+        raw_models = list(preset["models"])
     if no_models or raw_models is not None:
         parsed_models = parse_model_specs(raw_models, no_models=no_models)
         SERVICE.env["CT_MODELS"] = ",".join(parsed_models)
         if not parsed_models:
             SERVICE.env["CT_OLLAMA_NO_MODELS"] = "1"
 
-    raw_aliases = getattr(args, "alias", None)
+    raw_aliases = list(getattr(args, "alias", None) or [])
+    if preset.get("aliases") and raw_models == preset.get("models"):
+        # Only attach preset aliases when the preset's own model is used (not after `-m` overrides it)
+        raw_aliases = [f"{alias}={src}" for alias, src in preset["aliases"]] + raw_aliases
     if raw_aliases:
         aliases = parse_model_aliases(raw_aliases)
         SERVICE.env["CT_OLLAMA_ALIASES"] = ",".join(f"{alias}={src}" for alias, src in aliases)
@@ -788,6 +809,9 @@ def prepare_up(args: Any) -> None:
         "ollama_debug": getattr(args, "ollama_debug", None),
         "extra_env": getattr(args, "ollama_env", None),
     }
+    for key, value in (preset.get("server") or {}).items():
+        if tuning_kwargs.get(key) is None:
+            tuning_kwargs[key] = value
     if any(val is not None and val != [] for val in tuning_kwargs.values()):
         server_env = build_ollama_server_env(**tuning_kwargs)
         SERVICE.env["CT_OLLAMA_SERVER_ENV"] = json.dumps(server_env, sort_keys=True)

@@ -54,11 +54,11 @@ class HttpSafetyTest(unittest.TestCase):
         self.assertEqual(self.received, [])
 
     def test_service_clients_block_cross_origin_authenticated_redirect(self):
-        for name in ('qwen3-tts', 'indextts', 'nemotron-transcribe', 'unlimited-ocr', 'comfyui'):
+        for name in ('qwen3-tts', 'indextts', 'drama3', 'tangoflux', 'nemotron-transcribe', 'unlimited-ocr', 'comfyui'):
             with self.subTest(service=name):
                 module = runpy.run_path(str(ROOT / 'src/colabllm/services' / (name + '.py')))
                 with self.assertRaises(CliError):
-                    if name in ('qwen3-tts', 'indextts'):
+                    if name in ('qwen3-tts', 'indextts', 'drama3', 'tangoflux'):
                         module['_http_json'](self.url + '/redirect', 'test-only', timeout=3)
                     elif name == 'nemotron-transcribe':
                         module['_http_request'](self.url + '/redirect', 'test-only', timeout=3)

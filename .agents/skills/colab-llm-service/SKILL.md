@@ -29,15 +29,18 @@ templates/               also service.py + service.ipynb to copy for a new servi
 
 Existing services: `unsloth-studio` (built-in login, L4), `ollama` (Caddy auth, T4),
 `comfyui` (ComfyUI + ComfyUI-Manager, Caddy auth, L4, on-demand workflow model download to local SSD via `--workflow` / `pull-workflow`),
-`qwen-flash` (`SC117/Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF` IQ3_S, 800K YaRN 3.125x + BF16 vision,
+`qwen-flash` (`huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-v2-GGUF` `unsloth-UD-Q4_K_XL-V2`, 1M `1,048,576` YaRN 4.0x + `q8_0` KV + 26.82 GiB PLE in DDR5 RAM + `--n-cpu-moe 3` + BF16 vision,
 `llama-server --api-key-file` built-in auth, G4 GPU, domain alias `qwen`),
 `deepseek-coder` (`Abiray/DeepSeek-V4.1-Flash-1017-Uncensored-GSQ-RCO-Coder-GGUF` IQ2_XXS 72.1 GB pruned trunk + 110.6 GB Engram DDR5 host-RAM resident on G4/H100 or SSD lazy `mmap` fallback + BF16 `deepseek41v` vision, default `--reasoning on` with per-request client `enable_thinking` toggle, hardware-adaptive max context up to 1,048,576 via `llama-server --api-key-file`, G4/H100/A100 GPU, domain alias `deepseek`),
+`deepseek-qwen-9b` (`mradermacher/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic-i1-GGUF` `i1-Q4_K_M` 5.24 GiB default + native `mtp-Q8_0.gguf` `--spec-type draft-mtp` speculative sidecar + F16 `qwen3vl` vision + native 262,144 256K context with `q8_0` KV via `llama-server --api-key-file`, L4 default / T4 / A100 / H100 / G4 GPU, domain alias `deepseek-9b`),
 `nemotron-transcribe` (`nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B` via `vllm serve` + `nemo_speechlm`,
 Bearer API key auth, G4 GPU, domain alias `transcribe`, single & batch Drive audio CLI `transcribe`),
 `indextts` (`IndexTeam/IndexTTS-2.5` via `vllm serve --omni` 2-stage pipeline, Bearer API key auth, L4 GPU,
 domain alias `indextts`, zero-shot voice cloning, persistent Drive voices, native speed 0.5-2.0x,
 multilingual `zh`/`en`/`zhen`/`ja`/`es`/`ar`/`yue` & emotion control CLI `tts` / `voices` / `upload-voice`),
-`qwen3-tts` (`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` / `VoiceDesign` / `Base` via `vllm serve --omni` 2-stage pipeline + auxiliary multi-task GPU worker, Bearer API key auth, L4 GPU, domain alias `qwen3-tts`, 9 built-in speakers, natural-language instruction control, VoiceDesign persona synthesis, 3-second zero-shot voice cloning, and `design-voice` Voice-Design-then-Clone workflow).
+`qwen3-tts` (`Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` / `VoiceDesign` / `Base` via `vllm serve --omni` 2-stage pipeline + auxiliary multi-task GPU worker, Bearer API key auth, L4 GPU, domain alias `qwen3-tts`, 9 built-in speakers, natural-language instruction control, VoiceDesign persona synthesis, 3-second zero-shot voice cloning, and `design-voice` Voice-Design-then-Clone workflow),
+`drama3` (`fishaudio/drama-3` BF16 / `fishaudio/drama-3-int4` via `sglang-omni[fishaudio]==0.2.0` 3-stage pipeline + `Drama3Middleware` Bearer API key auth, G4 default / H100 / A100 GPU, domain alias `drama3`, single & multi-reference voice cloning, inline event tags `[sighs]`/`[laughs]`, persistent Drive voices, `/v1/audio/speech/batch`, and resumable `narrate` novel/audiobook CLI),
+`tangoflux` (`declare-lab/TangoFlux` CRPO / `declare-lab/TangoFlux-base` + `google/flan-t5-large` + `AutoencoderOobleck` 44.1 kHz stereo text-to-audio / sound-effect ASGI service, Bearer API key auth, T4 default / L4 / G4 GPU, domain alias `tangoflux`, 1–30s `generate`/`sfx`, resumable `batch` SFX cue sheets, and Drive output saving).
 
 Also available: `unlimited-ocr` (A100, Caddy auth, persistent Drive OCR jobs),
 `longcat-avatar` (G4, Caddy auth, audio-driven avatar generation with job/download commands),

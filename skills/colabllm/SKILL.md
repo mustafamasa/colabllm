@@ -2,10 +2,10 @@
 name: colabllm
 description: >-
   Use installed colabllm runtimes on Google Colab for LLM inference, PDF/image OCR,
-  speech transcription, speech synthesis, voice cloning, avatar/video generation,
-  ComfyUI and Unsloth Studio. Use when the user asks to start, query, call or stop
-  these runtimes, retrieve their API key, or troubleshoot a colabllm service.
-  Intended for package users; runtime development and notebook editing are outside scope.
+  speech transcription, speech synthesis, voice cloning, sound-effect/audio generation,
+  avatar/video generation, ComfyUI and Unsloth Studio. Use when the user asks to start,
+  query, call or stop these runtimes, retrieve their API key, or troubleshoot a colabllm
+  service. Intended for package users; runtime development and notebook editing are outside scope.
 ---
 
 # ColabLLM runtimes
@@ -31,13 +31,16 @@ such as Torch, CUDA and NumPy are unnecessary; computation occurs in Colab.
 
 | Task | Runtime | Reference to read |
 | --- | --- | --- |
-| OpenAI-compatible LLM / vision | `qwen-flash` | [Qwen Flash](references/qwen-flash.md) |
+| Qwen3.8-Flash-Next LLM / vision (1M context on G4) | `qwen-flash` | [Qwen Flash](references/qwen-flash.md) |
 | DeepSeek-V4.1-Flash Coder (auto max context up to 1M + vision) | `deepseek-coder` | [DeepSeek Coder](references/deepseek-coder.md) |
+| DeepSeek-V4-Pro Qwen3.5-9B reasoning / vision (256K on L4/T4) | `deepseek-qwen-9b` | [DeepSeek-Qwen-9B](references/deepseek-qwen-9b.md) |
 | Ollama models, OpenAI/Anthropic/native APIs & tuning | `ollama` | [Ollama](references/ollama.md) |
 | PDF/image files or directories to Markdown | `unlimited-ocr` | [Unlimited-OCR](references/unlimited-ocr.md) |
 | Audio/video transcription, timestamps, subtitles | `nemotron-transcribe` | [Nemotron](references/nemotron-transcribe.md) |
 | Built-in speech, voice design and cloning | `qwen3-tts` | [Qwen3-TTS](references/qwen3-tts.md) |
 | Voice cloning, emotion and speed | `indextts` | [IndexTTS](references/indextts.md) |
+| Multi-ref voice cloning, expressive tags & novel narration | `drama3` | [Fish Audio Drama 3](references/drama3.md) |
+| 44.1 kHz stereo sound effects, ambience & batch SFX cues | `tangoflux` | [TangoFlux](references/tangoflux.md) |
 | Audio-driven avatar generation | `longcat-avatar` | [LongCat Avatar](references/longcat-avatar.md) |
 | Text/image-to-video and continuation UI | `longcat-video` | [LongCat Video](references/longcat-video.md) |
 | Motion transfer, object/face/color video CLI & UI | `openjutsu` | [Openjutsu](references/openjutsu.md) |

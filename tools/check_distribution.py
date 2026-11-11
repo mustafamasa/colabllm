@@ -100,6 +100,8 @@ def check(artifact):
             'ollama': ('endpoints', 'models', 'pull', 'run', 'preload', 'unload', 'cp', 'rm', 'show'),
             'qwen3-tts': ('tts', 'voices', 'design-voice'),
             'indextts': ('tts', 'voices'),
+            'drama3': ('tts', 'narrate', 'voices', 'upload-voice', 'delete-voice', 'ls-drive'),
+            'tangoflux': ('generate', 'sfx', 'batch', 'models', 'ls-drive'),
             'comfyui': ('pull-workflow', 'pull-model'),
             'openjutsu': ('check',),
             'unlimited-ocr': ('ocr', 'job', 'resume'),
@@ -107,7 +109,9 @@ def check(artifact):
             'nemotron-transcribe': ('transcribe', 'download', 'ls-drive'),
             'flux-klein': ('generate', 'edit', 'upsample', 'ls-drive', 'models'),
             'qwen-image': ('generate', 'edit', 'ls-drive', 'models'),
+            'qwen-flash': ('models', 'plan'),
             'deepseek-coder': ('models', 'plan'),
+            'deepseek-qwen-9b': ('models', 'plan'),
         }
         for service in services:
             help_text = run([command, service, '--help'])

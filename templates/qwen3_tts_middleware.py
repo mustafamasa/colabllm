@@ -233,8 +233,11 @@ def _upload_drive_voice_sync(body: dict[str, Any]) -> tuple[int, dict[str, Any]]
             "ffmpeg", "-nostdin", "-v", "error", "-t", "24.0",
             "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1",
         ]
-        res = subprocess.run(cmd, input=raw_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
-        wav_bytes = res.stdout if (res.returncode == 0 and res.stdout) else raw_bytes
+        try:
+            res = subprocess.run(cmd, input=raw_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+            wav_bytes = res.stdout if (res.returncode == 0 and res.stdout) else raw_bytes
+        except OSError:
+            wav_bytes = raw_bytes
     else:
         try:
             ap = _resolve_path(raw_path)
@@ -246,8 +249,11 @@ def _upload_drive_voice_sync(body: dict[str, Any]) -> tuple[int, dict[str, Any]]
             "ffmpeg", "-nostdin", "-v", "error", "-t", "24.0",
             "-i", str(ap), "-vn", "-ac", "1", "-ar", "24000", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1",
         ]
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
-        wav_bytes = res.stdout if (res.returncode == 0 and res.stdout) else ap.read_bytes()
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, check=False)
+            wav_bytes = res.stdout if (res.returncode == 0 and res.stdout) else ap.read_bytes()
+        except OSError:
+            wav_bytes = ap.read_bytes()
 
     return _register_custom_voice_bytes(name, wav_bytes, ref_text=ref_text, speaker_desc=speaker_desc, consent=consent)
 

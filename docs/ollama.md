@@ -30,6 +30,27 @@ colabllm ollama up --no-models
 - `--models-storage ssd|drive`: default `ssd` (`/content/ollama/models`, fast local NVMe; models must be pulled again after the VM is released); `drive` keeps the model cache on Google Drive (`<DATA_DIR>/models`) for reuse across sessions.
 - `--ollama-version 0.17.7`: pins the installed Ollama version when needed.
 
+### One-flag model presets (`--preset`)
+
+A preset sets the GPU, model, alias and server tuning parameters in one go; arguments passed explicitly on the command line take precedence over preset values.
+
+```bash
+# Huihui Qwen3.8-27B abliterated: full BF16 weights + native 262K context + vision/tools/thinking, G4 by default
+colabllm ollama up --preset huihui-27b --domain
+```
+
+| Preset | GPU | Model | Alias | Server parameters |
+| :--- | :--- | :--- | :--- | :--- |
+| `huihui-27b` | G4 | `huihui_ai/Qwen3.8-abliterated:27b-bf16` (about 56 GB) | `huihui-qwen3.8-27b` | context 262144, Flash Attention, f16 KV, single concurrency, kept resident in VRAM |
+
+Clients can use the alias `huihui-qwen3.8-27b` as the model name. To save resources you can override the preset, for example Q4 quantization and 64K context on L4:
+
+```bash
+colabllm ollama up --preset huihui-27b --gpu L4 -m huihui_ai/Qwen3.8-abliterated:27b-q4_K_M --context-length 65536 --kv-cache-type q8_0
+```
+
+Overriding the model with `-m` does not create the preset alias. Ollama's default context is only 4096 and anything beyond it is silently truncated; set `--context-length` explicitly when not using a preset.
+
 ## 2. Choosing compatible APIs (all on, or restricted)
 
 Ollama natively serves three API families; the default `--compat all` **enables all of them**, and you can restrict which families are exposed at startup:

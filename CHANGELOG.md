@@ -11,6 +11,27 @@ The version number comes only from `pyproject.toml` and follows `MAJOR.MINOR.PAT
 - `up` records the accelerator it started with in the instance state (`gpu`).
 - `purge` lifecycle command (`colabllm <runtime> purge [-i ID] [--delete-tunnel | --keep-tunnel]`): deletes a stopped instance's local state after `colab stop` confirms no session is left; refuses while the runner is alive. The control panel can delete single instances or a selection.
 
+## [0.1.5] - 2026-11-09
+
+### Added
+
+- New `deepseek-qwen-9b` runtime (L4 by default, T4/A100/H100/G4 compatible, `llama-server` Bearer API key): deploys the `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic` GGUF with `i1-Q4_K_M` imatrix weights by default, plus a native `Q8_0` MTP draft sidecar exported remotely and cached on Google Drive (`--spec-type draft-mtp` lossless speculative decoding, about `57–68 tok/s` measured on L4), the `mmproj-f16` vision projector and the full native `256K` (`262,144`) context; provides `plan` and `models` subcommands.
+- New `tangoflux` runtime (T4 by default, L4 recommended for speed, Bearer API key): deploys `declare-lab/TangoFlux` 44.1 kHz stereo text-to-sound-effect generation with single `generate`, multiple random variants and resumable `batch` SFX pack commands.
+- New `drama3` runtime (G4, SGLang-Omni Bearer API key): deploys `fishaudio/drama-3` multilingual zero-shot voice-cloning speech synthesis with a custom voice library, resumable chapter-by-chapter audiobook synthesis of novels, and automatic multi-character dialogue splitting and voicing through an external OpenAI-compatible LLM.
+- `ollama` runtime: new `--preset huihui-27b` one-flag preset that selects the `Huihui-Qwen3.8-27B-abliterated` quantization and context configuration.
+
+### Changed
+
+- `qwen-flash` upgraded to `huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-v2-GGUF` (`unsloth-UD-Q4_K_XL-V2` + the Unsloth `bf16` precision fix patch + `mmproj-BF16`) on `llama.cpp` `b11540`, enabling the full `1M` (`1,048,576`) context on G4 with YaRN 4.0x, DDR5 host-RAM PLE residency and adaptive `--n-cpu-moe 3`; adds the offline `plan` and online `models` subcommands.
+
+### Fixed
+
+- ASGI middlewares now handle the `OSError` raised when `ffmpeg` is missing during the WAV fallback.
+
+### Documentation
+
+- Documented migrating the state directory and fixed-domain configuration across machines, and added a comparison of the DeepSeek runtimes (`deepseek-coder` vs `deepseek-qwen-9b`).
+
 ## [0.1.4] - 2026-11-06
 
 ### Changed

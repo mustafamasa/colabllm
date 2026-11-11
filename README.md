@@ -63,6 +63,37 @@ Ayrı bir dizin kullanmak için `COLABLLM_HOME=/absolute/path` ayarlanabilir.
 Kaldırmak için `uv tool uninstall colabllm`; kullanıcı yapılandırma dizini korunur.
 Güncellemeden önce çalışan servisleri durdurun, sonra yeniden başlatın; böylece arka plandaki runner'ın kullandığı kurulu dosyalar değiştirilmez.
 
+### Bilgisayar değiştirme (aynı alan adı ve API Key ile devam)
+
+Alan adı sahipliği ve kimlik bilgileri yalnızca yerel `~/.colabllm/` dizininde tutulur. Başka bir bilgisayarda doğrudan `up --domain` çalıştırırsanız:
+
+- **FRP arka ucu başlamaz**: yeni bilgisayarda `frp-config` yeni bir `project_id` üretir; mevcut DNS kayıtları ve FRP sunucu rotaları eski `project_id`'ye aittir, `up` alan adını yanlışlıkla ele geçirmemek için `DNS conflict` ile devralmayı reddeder.
+- **API Key değişir**: yeni bilgisayarda `state.json` olmadığı için yeni bir token üretilir; istemcilerde tanımlı eski Key'ler 401 döner.
+- **Cloudflare arka ucunda çift bağlantı**: tünel ve DNS servis adına göre yeniden kullanılır, bilgisayar ayrımı yapılmaz; iki bilgisayar aynı servisi aynı anda çalıştırırsa istekler iki VM arasında dönüşümlü dağıtılır (Key'ler farklıysa rastgele 401).
+- **Çift ücretlendirme**: eski bilgisayardaki runner durdurulmazsa eski Colab VM çalışmaya devam eder, yeni bilgisayar bir tane daha oluşturur.
+
+Aynı servis ve aynı örnek aynı anda yalnızca tek bir bilgisayardan çalıştırılmalıdır. Taşıma adımları:
+
+```bash
+# 1. Eski bilgisayar: servisi durdurun; alan adı rotalarını ve DNS sahipliğini korumak için --delete-tunnel eklemeyin
+colabllm <name> down
+
+# 2. Durum dizininin tamamını yeni bilgisayara kopyalayın (gizli kimlik bilgileri içerir, yalnızca sizin okuyabileceğiniz şekilde tutun)
+rsync -a --chmod=go-rwx ~/.colabllm/ <yeni-bilgisayar>:~/.colabllm/
+
+# 3. Yeni bilgisayar: colabllm'i kurun ve harici araçların yetkilendirmesini tamamlayın
+#    colab girişi + `colab dfs consent`; aynı Cloudflare hesabıyla `cf` girişi; FRP arka ucu için sunucuya SSH erişimi
+colabllm tunnel-config            # ana alan adı ve FRP ayarlarının taşındığını doğrulayın
+colabllm doctor
+
+# 4. Yeni bilgisayar: başlatın; alan adı, API Key ve FRP rotaları aynı kalır
+colabllm <name> up --domain
+```
+
+`~/.colabllm/` içindeki taşımayla ilgili dosyalar: `tunnel-config.json` (ana alan adı, FRP `project_id`), `frp/*.json` (FRP istemci kimlik bilgileri),
+`services/<name>/state.json` (API Key / giriş parolası, tünel ve DNS kayıtları). Aynı servisi gerçekten iki bilgisayarda aynı anda çalıştırmanız gerekiyorsa
+farklı örnekler kullanın (ör. `-i 2`); bunların alt alan adları, durumları ve Key'leri ayrıdır.
+
 ## Runtime kullanım kılavuzları
 
 Her runtime'ın komutları, API/arayüz akışları, girdi/çıktıları ve kurtarma davranışı aşağıdaki "Runtime kılavuzları" tablosundaki belgelerdedir.
@@ -117,23 +148,23 @@ uv tool install --force .
 uv build --no-sources
 
 # Wheel'in izole ortamda kurulup çalıştığını doğrula
-python tools/check_distribution.py dist/colabllm-0.1.4-py3-none-any.whl
+python tools/check_distribution.py dist/colabllm-0.1.5-py3-none-any.whl
 ```
 
 Sürüm numarasının tek kaynağı `pyproject.toml`'dur; CLI sürümü kurulu paketin meta verisinden okur.
 `MAJOR.MINOR.PATCH` kullanılır: düzeltmeler PATCH'i, yeni özellikler MINOR'u, uyumsuz değişiklikler MAJOR'u artırır;
 `0.x` geliştirme aşamasında uyumsuz değişiklikler MINOR'u artırır ve [CHANGELOG.md](https://github.com/mustafamasa/colabllm/blob/english/CHANGELOG.md) içinde açıklanır.
-Güncel sürüm `0.1.4`, Git etiketi `v0.1.4`'tür (`0.1.0` geri çekildi); sonraki bir yayın örneği:
+Güncel sürüm `0.1.5`, Git etiketi `v0.1.5`'tir (`0.1.0` geri çekildi); sonraki bir yayın örneği:
 
 ```bash
 uv version --bump patch
 # CHANGELOG.md içindeki Unreleased bölümünü bu sürümün tarihli girdisine taşı
-python tools/check_release.py --tag v0.1.5
+python tools/check_release.py --tag v0.1.6
 git add pyproject.toml CHANGELOG.md
-git commit -m "chore: release 0.1.5"
-git tag -a v0.1.5 -m "Release 0.1.5"
+git commit -m "chore: release 0.1.6"
+git tag -a v0.1.6 -m "Release 0.1.6"
 git push origin english
-git push origin v0.1.5
+git push origin v0.1.6
 ```
 
 `v*` etiketinin gönderilmesi [release.yml](https://github.com/mustafamasa/colabllm/blob/english/.github/workflows/release.yml) iş akışını tetikler:
@@ -264,6 +295,8 @@ Yerel testlerdeki gerçek FRP entegrasyon testi için ayrıca `COLABSVC_FRP_TEST
 | **NVIDIA-Nemotron-3.5-Transcribe-30B-A4B** | `G4` | `vLLM` Bearer API Key (`builtin`) | `https://transcribe.example.com` | [docs/nemotron-transcribe.md](https://github.com/mustafamasa/colabllm/blob/english/docs/nemotron-transcribe.md) |
 | **Qwen3-TTS** | `L4` | Bearer API Key (`builtin`) | `https://qwen3-tts.example.com` | [docs/qwen3-tts.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen3-tts.md) |
 | **IndexTTS-2.5** | `L4` | Bearer API Key (`builtin`) | `https://indextts.example.com` | [docs/indextts.md](https://github.com/mustafamasa/colabllm/blob/english/docs/indextts.md) |
+| **Fish Audio Drama 3 (SGLang-Omni TTS ve roman seslendirme)** | `G4` | `SGLang-Omni` Bearer API Key (`builtin`) | `https://drama3.example.com` | [docs/drama3.md](https://github.com/mustafamasa/colabllm/blob/english/docs/drama3.md) |
+| **TangoFlux (44.1 kHz stereo ses efekti ve metinden sese)** | `T4` | Bearer API Key (`builtin`) | `https://tangoflux.example.com` | [docs/tangoflux.md](https://github.com/mustafamasa/colabllm/blob/english/docs/tangoflux.md) |
 | **Unlimited-OCR 2** | `A100` | Caddy (Basic Auth + Bearer) | `https://unlimited-ocr.example.com` | [docs/unlimited-ocr.md](https://github.com/mustafamasa/colabllm/blob/english/docs/unlimited-ocr.md) |
 | **LongCat-Video-Avatar 1.5** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-avatar.example.com` | [docs/longcat-avatar.md](https://github.com/mustafamasa/colabllm/blob/english/docs/longcat-avatar.md) |
 | **LongCat-Video** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-video.example.com` | [docs/longcat-video.md](https://github.com/mustafamasa/colabllm/blob/english/docs/longcat-video.md) |
@@ -271,10 +304,21 @@ Yerel testlerdeki gerçek FRP entegrasyon testi için ayrıca `COLABSVC_FRP_TEST
 | **FLUX 3 Image Klein (T2I + Multi-Ref I2I + PUP)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://flux-klein.example.com` | [docs/flux-klein.md](https://github.com/mustafamasa/colabllm/blob/english/docs/flux-klein.md) |
 | **Qwen-Image-2.1 (T2I + 1-4 Ref RGBA I2I)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://qwen-image.example.com` | [docs/qwen-image.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen-image.md) |
 | **ComfyUI + ComfyUI-Manager** | `L4` | Caddy (Basic Auth + Bearer) | `https://comfyui.example.com` | [docs/comfyui.md](https://github.com/mustafamasa/colabllm/blob/english/docs/comfyui.md) |
-| **Qwen3.8-Flash-Next (800K + Vision)** | `G4` | `llama-server` Bearer API Key | `https://qwen.example.com` | [docs/qwen-flash.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen-flash.md) |
+| **Qwen3.8-Flash-Next (UD-Q4_K_XL-V2 · 1M + Vision)** | `G4` | `llama-server` Bearer API Key | `https://qwen.example.com` | [docs/qwen-flash.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen-flash.md) |
 | **DeepSeek-V4.1-Flash Coder (Auto Max 1M + Vision)** | `G4` | `llama-server` Bearer API Key | `https://deepseek.example.com` | [docs/deepseek-coder.md](https://github.com/mustafamasa/colabllm/blob/english/docs/deepseek-coder.md) |
-| **Ollama** | `T4` | Caddy (Basic Auth + Bearer + `x-api-key`) | `https://ollama.example.com` | [docs/ollama.md](https://github.com/mustafamasa/colabllm/blob/english/docs/ollama.md) |
+| **DeepSeek-V4-Pro-Qwen3.5-9B (i1-Q4_K_M + MTP · 256K + Vision)** | `L4` | `llama-server` Bearer API Key | `https://deepseek-9b.example.com` | [docs/deepseek-qwen-9b.md](https://github.com/mustafamasa/colabllm/blob/english/docs/deepseek-qwen-9b.md) |
+| **Ollama (Qwen3.8-27B BF16 ön ayarı dahil)** | `T4` / `G4` | Caddy (Basic Auth + Bearer + `x-api-key`) | `https://ollama.example.com` | [docs/ollama.md](https://github.com/mustafamasa/colabllm/blob/english/docs/ollama.md) |
 | **Unsloth Studio** | `L4` | Yerleşik web girişi (`builtin`) | `https://unsloth-studio.example.com` | [docs/unsloth-studio.md](https://github.com/mustafamasa/colabllm/blob/english/docs/unsloth-studio.md) |
+
+### Metin ve programlama modeli seçimi (Colab G4 donanım sınırları)
+
+Colab G4'te ölçülen donanım sınırlarına göre (yerel NVMe'de kullanılabilir yaklaşık **`253 GB`**, **`95.6 GiB`** VRAM, **`~176 GiB`** DDR5 ana bellek) projedeki başlıca metin/çok kipli çıkarım seçenekleri şu görev dağılımıyla kurgulanmıştır:
+
+- **`deepseek-coder` (programlama, coding agent'lar ve karmaşık mantıksal akıl yürütme için ilk tercih)**: varsayılan olarak `Abiray/DeepSeek-V4.1-Flash-1017-Uncensored-GSQ-RCO-Coder-GGUF` kurulur (`ISTA-DASLab` ile %50 yetenek budaması yapılmış, çekirdek `192` programlama/akıl yürütme uzmanını koruyan `GSQ-RCO IQ2_XXS` gövde `72.1 GB` + `110.6 GB` `IQ4_NL` Engram + `BF16` görsel, toplam **`183.7 GB`**).
+  - **Neden budanmamış `huihui-ai/Huihui-DeepSeek-V4.1-Flash-1017-abliterated-GGUF` kullanılmıyor**: bu depoda doğrudan yüklenebilen hazır dosyalar yalnızca **`1-bit`** `UD-IQ1_S` (`234 GB`; yerel disk sınırına çok yakın, ayrıca `114 GiB` gövde G4 VRAM'ini aşar ve yaklaşık `30 GiB` uzmanın belleğe aktarılması gerekir, bu da ciddi yavaşlama demektir) ve `UD-IQ1_M`'dir (`251 GB`, güvenli yerel disk kapasitesini aşar); diğer `Q2` / `Coder` sürümleri yerelde yeniden yazılması gereken `patch` fark paketleridir. Mevcut `Abiray` hazır sürümü ise yerel diskte yaklaşık `65 GB` boş alan bırakır, **gövdenin %100'ü G4 VRAM'inde (`n_cpu_moe=0`) + `103 GiB` Engram tamamen DDR5 bellekte kalarak tam `1,048,576` (1M) bağlamla çalışır** ve `192` `IQ2_XXS` programlama uzmanı bayt düzeyinde kayıpsız kalır (orijinalle Top-1 uyumu `99.80%`, güvenlik reddi oranı `0.0%`).
+- **`qwen-flash` (günlük genel sohbet, çok uzun belge anlama ve edebi yazım için ilk tercih)**: varsayılan olarak `huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-v2-GGUF` deposundaki hazır **`unsloth-UD-Q4_K_XL-V2`** dizini kurulur (`imatrix_micro3` kalibrasyonlu **4-bit** nicemleme, `103.7 GiB` + `BF16` görsel; bu dizin zaten sansürü kaldırılmış ve yeniden kalibre edilmiş hazır sürümdür, depodaki `patch-unsloth` fark paketinin üstüne tekrar uygulanması gerekmez ve uygulanmamalıdır). `26.82 GiB` PLE tablosunun DDR5 bellekte tutulması, `q8_0` sıkıştırılmış KV/QSA indeks önbelleği (`16.05 GiB`) ve yalnızca `3/48` yönlendirilmiş uzman katmanının (`4.39 GiB`) otomatik aktarılmasıyla G4'te tam **`1,048,576` (1M)** bağlamla çalışır; ölçülen üretim hızı **`67 ~ 88 tok/s`** (`84K` önbelleksiz girdide prefill `818 tok/s`).
+- **`ollama --preset huihui-27b` (kayıpsız BF16 yoğun model ve çoklu protokol uyumluluğu için ilk tercih)**: G4'te tek bayrakla `huihui_ai/Qwen3.8-abliterated:27b-bf16` kurulur (yaklaşık `56 GB` tam BF16 ağırlık + yerel `262,144` bağlam + `f16` KV); Ollama `/api/*`, OpenAI `/v1/*` ve Anthropic `/v1/messages` arayüzlerinin üçünü birden yerel olarak sunar.
+- **`deepseek-qwen-9b` (L4 / T4'te kota dostu, yüksek verimli güçlü akıl yürütme ve çok kiplilik için ilk tercih)**: varsayılan olarak **L4 (24 GB)** üzerinde `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic` modelinin imatrix kalibrasyonlu **`i1-Q4_K_M` (`5.24 GiB`)** sürümü + **yerel Multi-Token Prediction (`MTP`) taslak yan modeli (`--spec-type draft-mtp`)** + `mmproj-f16` görsel kurulur (`--quant Q8_0` ile 8-bit'e geçilebilir). 24 katman Gated DeltaNet + gövde/MTP toplam 9 tam dikkat katmanlı hibrit yapı sayesinde **256K (`262,144`) tam pencerede `q8_0` KV yalnızca `4.83 GiB`** tutar; L4'te (`~9.3 GiB` boşluk) tüm katmanlar GPU'da kalarak yerel 256K bağlam + derin düşünme + görsel anlama ile çalışır (`--gpu T4` de otomatik olarak `i1-Q4_K_M` + MTP kullanır).
 
 ## Dizin yapısı
 
@@ -470,7 +514,7 @@ colabllm unsloth-studio up
 # 2. Tüm servislerin ortak ana alan adını ayarla, sonra sabit alan adıyla başlat
 colabllm tunnel-config --base-domain example.com
 colabllm ollama up --domain
-colabllm qwen-flash up --domain     # https://qwen.example.com'a bağlanır (G4 GPU, 800K bağlam + görsel)
+colabllm qwen-flash up --domain     # https://qwen.example.com'a bağlanır (G4 GPU, 1M bağlam + görsel)
 
 # 3. Erişim URL'sini, giriş şifresini ve API token'ını göster
 colabllm ollama info --show-secrets

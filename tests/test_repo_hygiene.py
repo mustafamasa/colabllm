@@ -80,8 +80,22 @@ class RepoHygieneTest(unittest.TestCase):
         deepseek.prepare_up(types.SimpleNamespace())
         self.assertEqual(deepseek.SERVICE.env, ds_baseline)
 
+        drama3 = load_service("drama3")
+        d3_baseline = dict(drama3.SERVICE.env)
+        drama3.prepare_up(types.SimpleNamespace(up_CT_DRAMA3_VARIANT="int4"))
+        self.assertEqual(drama3.SERVICE.env["CT_DRAMA3_VARIANT"], "int4")
+        drama3.prepare_up(types.SimpleNamespace())
+        self.assertEqual(drama3.SERVICE.env, d3_baseline)
+
+        tangoflux = load_service("tangoflux")
+        tf_baseline = dict(tangoflux.SERVICE.env)
+        tangoflux.prepare_up(types.SimpleNamespace(up_CT_TANGOFLUX_VARIANT="base"))
+        self.assertEqual(tangoflux.SERVICE.env["CT_TANGOFLUX_VARIANT"], "base")
+        tangoflux.prepare_up(types.SimpleNamespace())
+        self.assertEqual(tangoflux.SERVICE.env, tf_baseline)
+
     def test_service_default_hostnames_are_short_aliases(self):
-        for name in ("qwen-flash", "deepseek-coder", "nemotron-transcribe", "indextts", "qwen3-tts"):
+        for name in ("qwen-flash", "deepseek-coder", "nemotron-transcribe", "indextts", "qwen3-tts", "drama3", "tangoflux"):
             alias = load_service(name).SERVICE.default_hostname
             self.assertTrue(alias and "." not in alias, (name, alias))
 

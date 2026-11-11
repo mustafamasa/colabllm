@@ -368,6 +368,37 @@ class OllamaServiceCliTest(unittest.TestCase):
         self.mod.prepare_up(types.SimpleNamespace(models=None))
         self.assertEqual(self.mod.SERVICE.env, {"CT_MODELS": "qwen2.5:0.5b"})
 
+    def test_model_preset_applies_gpu_model_alias_tuning_and_allows_overrides(self):
+        parser = colabsvc.build_parser(self.mod.SERVICE, self.mod.configure_cli)
+        base_gpu = self.mod.SERVICE.gpu
+        self.mod.prepare_up(parser.parse_args(["up", "--preset", "huihui-27b"]))
+        env = dict(self.mod.SERVICE.env)
+        self.assertEqual(self.mod.SERVICE.gpu, "G4")
+        self.assertEqual(env["CT_MODELS"], "huihui_ai/Qwen3.8-abliterated:27b-bf16")
+        self.assertEqual(env["CT_OLLAMA_ALIASES"], "huihui-qwen3.8-27b=huihui_ai/Qwen3.8-abliterated:27b-bf16")
+        server_env = json.loads(env["CT_OLLAMA_SERVER_ENV"])
+        self.assertEqual(server_env["OLLAMA_CONTEXT_LENGTH"], "262144")
+        self.assertEqual(server_env["OLLAMA_FLASH_ATTENTION"], "1")
+        self.assertEqual(server_env["OLLAMA_KV_CACHE_TYPE"], "f16")
+        self.assertEqual(server_env["OLLAMA_KEEP_ALIVE"], "-1")
+
+        # Explicit flags override preset values; `-m` drops the preset alias
+        self.mod.prepare_up(parser.parse_args([
+            "up", "--preset", "huihui-27b", "--gpu", "L4",
+            "-m", "huihui_ai/Qwen3.8-abliterated:27b-q4_K_M", "--context-length", "65536", "--kv-cache-type", "q8_0",
+        ]))
+        env = dict(self.mod.SERVICE.env)
+        self.assertEqual(self.mod.SERVICE.gpu, base_gpu)  # --gpu is applied later by colabsvc from args
+        self.assertEqual(env["CT_MODELS"], "huihui_ai/Qwen3.8-abliterated:27b-q4_K_M")
+        self.assertNotIn("CT_OLLAMA_ALIASES", env)
+        server_env = json.loads(env["CT_OLLAMA_SERVER_ENV"])
+        self.assertEqual(server_env["OLLAMA_CONTEXT_LENGTH"], "65536")
+        self.assertEqual(server_env["OLLAMA_KV_CACHE_TYPE"], "q8_0")
+
+        self.mod.prepare_up(types.SimpleNamespace(models=None))
+        self.assertEqual(self.mod.SERVICE.gpu, base_gpu)
+        self.assertEqual(self.mod.SERVICE.env, {"CT_MODELS": "qwen2.5:0.5b"})
+
     def test_endpoints_redacts_token_by_default(self):
         redacted = json.loads(self._run_subcommand(["endpoints", "--json"]))
         self.assertEqual(redacted["compat"], ["openai", "anthropic"])

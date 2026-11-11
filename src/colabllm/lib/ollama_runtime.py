@@ -31,6 +31,29 @@ COMPAT_ALIASES = {
 KV_CACHE_TYPES = ("f16", "q8_0", "q4_0")
 MODELS_STORAGE_MODES = ("ssd", "drive")
 
+# One-flag model presets for `colabllm ollama up --preset NAME`.
+# Each preset supplies GPU, models, aliases and server tuning; any explicit CLI flag overrides the preset value.
+MODEL_PRESETS: dict[str, dict[str, Any]] = {
+    "huihui-27b": {
+        "description": (
+            "Huihui Qwen3.8-27B abliterated, full BF16 weights + native 262K context + vision/tools/thinking "
+            "on G4 (~56 GB weights + ~16 GiB f16 KV)"
+        ),
+        "gpu": "G4",
+        "models": ["huihui_ai/Qwen3.8-abliterated:27b-bf16"],
+        "aliases": [("huihui-qwen3.8-27b", "huihui_ai/Qwen3.8-abliterated:27b-bf16")],
+        "server": {
+            "context_length": 262144,
+            "flash_attention": True,
+            "kv_cache_type": "f16",
+            "num_parallel": 1,
+            "max_loaded_models": 1,
+            "keep_alive": "-1",
+            "load_timeout": "15m",
+        },
+    },
+}
+
 # Presets grounded in https://docs.ollama.com/faq and https://docs.ollama.com/context-length
 OPTIMIZATION_PROFILES: dict[str, dict[str, str]] = {
     "balanced": {

@@ -153,6 +153,24 @@ class MiddlewareImportTest(unittest.TestCase):
         self.assertEqual(code, 400)
         with self.assertRaises(ValueError):
             qwen._prepare_speech_request(json.dumps({"input": "hi", "ref_audio": "file:///etc/passwd"}).encode())
+        drama3 = importlib.import_module("drama3_middleware")
+        code, out = drama3._upload_drive_voice_sync({"name": "../x", "drive_path": "a.wav"})
+        self.assertEqual(code, 400)
+        with self.assertRaises(ValueError):
+            drama3._prepare_speech_request(json.dumps({"input": "hi", "ref_audio": "file:///etc/passwd"}).encode())
+        with self.assertRaises(ValueError):
+            drama3._prepare_speech_request(
+                json.dumps({"input": "hi", "references": [{"audio_path": "file:///etc/passwd"}]}).encode()
+            )
+        with self.assertRaises(ValueError):
+            drama3._prepare_speech_request(json.dumps({"input": "hi", "save_to_drive": "../../escape.wav"}).encode())
+        tangoflux = importlib.import_module("tangoflux_server")
+        with self.assertRaises(ValueError):
+            tangoflux._prepare_generate_request(json.dumps({"prompt": "rain", "save_to_drive": "../../escape.wav"}).encode())
+        with self.assertRaises(ValueError):
+            tangoflux._prepare_batch_request(
+                json.dumps({"items": [{"prompt": "rain", "save_to_drive": "/etc/passwd"}]}).encode()
+            )
 
     def test_flux_klein_middleware_rejects_traversal_and_non_drive_urls(self):
         flux = importlib.import_module("flux_klein_middleware")

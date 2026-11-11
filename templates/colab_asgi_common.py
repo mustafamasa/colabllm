@@ -310,7 +310,13 @@ def audio_path_to_wav_data_url(
         "-i", str(audio_path),
         "-vn", "-ac", "1", "-ar", str(sample_rate), "-c:a", "pcm_s16le", "-f", "wav", "pipe:1",
     ]
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False)
+    try:
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout, check=False)
+    except OSError as os_err:
+        if audio_path.suffix.lower() == ".wav":
+            b64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
+            return f"data:audio/wav;base64,{b64}"
+        raise RuntimeError(f"ffmpeg failed decoding {audio_path.name}: {os_err}") from os_err
     if res.returncode != 0 or not res.stdout:
         if audio_path.suffix.lower() == ".wav":
             b64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
