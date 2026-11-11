@@ -23,7 +23,7 @@ import urllib.request
 
 NODE_VERSION = "22.14.0"
 PROXY_VERSION = "0.1.6"
-DEFAULT_OPENJUTSU_REPO = "https://github.com/deluxebear/colab_openjutsu.git"
+DEFAULT_OPENJUTSU_REPO = "https://github.com/D3voz/openjutsu.git"
 HF_RESOLVE_URL_RE = re.compile(r"^https?://huggingface\.co/([^/]+/[^/]+)/(?:resolve|blob)/([^/]+)/(.+?)(?:\?.*)?$")
 
 CUSTOM_NODES: tuple[tuple[str, str], ...] = (

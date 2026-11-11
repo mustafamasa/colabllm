@@ -448,11 +448,11 @@ class OpenjutsuServiceCliTest(unittest.TestCase):
             server.server_close()
 
     def test_notebook_includes_vram_flags_and_caddy_headers(self):
-        self.assertEqual(runtime.DEFAULT_OPENJUTSU_REPO, "https://github.com/deluxebear/colab_openjutsu.git")
+        self.assertEqual(runtime.DEFAULT_OPENJUTSU_REPO, "https://github.com/D3voz/openjutsu.git")
         nb = json.loads((ROOT / "src/colabllm/services/openjutsu.ipynb").read_text(encoding="utf-8"))
         setup_src = "".join(nb["cells"][2]["source"])
-        self.assertIn("https://github.com/deluxebear/colab_openjutsu.git", setup_src)
-        self.assertNotIn("https://github.com/D3voz/openjutsu", setup_src)
+        self.assertIn("https://github.com/D3voz/openjutsu.git", setup_src)
+        self.assertNotIn("https://github.com/deluxebear/colab_openjutsu", setup_src)
         svc_src = "".join(nb["cells"][3]["source"])
         self.assertIn("select_comfy_vram_flags", svc_src)
         self.assertIn("CT_COMFY_VRAM_MODE", svc_src)

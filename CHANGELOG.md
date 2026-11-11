@@ -11,6 +11,10 @@ The version number comes only from `pyproject.toml` and follows `MAJOR.MINOR.PAT
 - `up` records the accelerator it started with in the instance state (`gpu`).
 - `purge` lifecycle command (`colabllm <runtime> purge [-i ID] [--delete-tunnel | --keep-tunnel]`): deletes a stopped instance's local state after `colab stop` confirms no session is left; refuses while the runner is alive. The control panel can delete single instances or a selection.
 
+### Changed
+
+- `openjutsu` now installs the original English [`D3voz/openjutsu`](https://github.com/D3voz/openjutsu) web app instead of the Chinese-localized `deluxebear/colab_openjutsu`; existing checkouts switch origin automatically on the next `up`.
+
 ## [0.1.5] - 2026-11-09
 
 ### Added

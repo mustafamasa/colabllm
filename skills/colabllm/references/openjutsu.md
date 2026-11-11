@@ -6,7 +6,7 @@ Defaults to **G4** (RTX PRO 6000 Blackwell, about 96 GB VRAM), behind Caddy Basi
 
 1. **ComfyUI (`127.0.0.1:8188`)**: preinstalls all 13 custom node packs Openjutsu needs, the SolarRenderer long-clip silence patch and Linux path normalization.
 2. **Patched `comfy-api-proxy` (`127.0.0.1:8189`)**: relays live generation progress and persists job metadata (500 MB per-file upload limit).
-3. **Openjutsu Next.js 16 production server (`127.0.0.1:3000`)**: provides the full web workbench (its UI language comes from the upstream project) and the `/api/*` endpoints, based on [`colab_openjutsu`](https://github.com/deluxebear/colab_openjutsu).
+3. **Openjutsu Next.js 16 production server (`127.0.0.1:3000`)**: provides the full English web workbench and the `/api/*` endpoints from the original [`D3voz/openjutsu`](https://github.com/D3voz/openjutsu); the Linux detector-path fix is applied to its workflows during setup.
 
 Shared prerequisites, domains, authentication, timeouts and stop behavior are in [Common runtime operations](runtime-common.md). All commands below run on the local machine.
 
