@@ -29,7 +29,7 @@ from processes import runner_alive
 PACKAGE = Path(__file__).resolve().parents[1]
 SERVICES_DIR = PACKAGE / 'services'
 ASSETS_DIR = PACKAGE / 'webui'
-DOCS_URL = 'https://github.com/deluxebear/colabllm/blob/master/docs/{}.md'
+DOCS_URL = 'https://github.com/mustafamasa/colabllm/blob/english/docs/{}.md'
 GPUS = ('T4', 'L4', 'G4', 'A100', 'H100', 'none')
 SECRET_KEYS = ('auth_user', 'auth_pass', 'api_token', 'login_user', 'login_pass')
 CATEGORIES = {
