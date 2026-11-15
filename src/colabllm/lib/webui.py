@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import runpy
 import secrets
+import shutil
 import socketserver
 import subprocess
 import sys
@@ -354,6 +355,8 @@ def environment() -> dict:
     except Exception:
         pkg_version = 'dev'
     return dict(home=str(colabsvc.STATE_ROOT), base_domain=domain, transport=transport,
+                saved_base_domain=config.get('base_domain'),
+                domain_override=os.environ.get('COLABSVC_BASE_DOMAIN') or None,
                 frp_server=frp.get('server_ip') if frp.get('enabled') else None, version=pkg_version,
                 python=sys.version.split()[0])
 
@@ -508,6 +511,102 @@ def doctor(online=False) -> dict:
     return diagnose(online=online, timeout=10)
 
 
+def update_tunnel(body: dict) -> dict:
+    if set(body) != {'base_domain'} or not isinstance(body['base_domain'], str):
+        raise ValueError('base_domain must be a string')
+    domain = body['base_domain'].strip()
+    colabsvc.update_tunnel_config(base_domain=domain or None, clear=not domain)
+    return environment()
+
+
+_cf_login_lock = threading.Lock()
+_cf_login = {'state': 'idle'}
+
+
+def cloudflare_status() -> dict:
+    installed = bool(shutil.which('cf'))
+    with _cf_login_lock:
+        login = _cf_login['state']
+    if not installed:
+        return dict(installed=False, authorized=False, login=login)
+    try:
+        result = subprocess.run(['cf', 'auth', 'whoami', '--json'], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=10)
+        data = json.loads(result.stdout) if result.returncode == 0 else None
+        authorized = isinstance(data, dict) and data.get('authenticated') is True and data.get('tokenValid') is not False
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        authorized = False
+    return dict(installed=True, authorized=authorized, login=login)
+
+
+def cloudflare_zones() -> dict:
+    if not shutil.which('cf'):
+        raise RuntimeError('Cloudflare CLI not found')
+    try:
+        result = subprocess.run(['cf', 'zones', 'list'], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=15)
+        if result.returncode != 0:
+            raise RuntimeError('Cannot list Cloudflare zones; check sign-in and zone permissions')
+        data = json.loads(result.stdout)
+        if not isinstance(data, list):
+            raise ValueError('unexpected zone response')
+        zones = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            try:
+                name = colabsvc.validate_domain(item.get('name'))
+            except ValueError:
+                continue
+            status = item.get('status')
+            zones.append(dict(name=name, status=status if isinstance(status, str) else 'unknown'))
+        return dict(zones=sorted(zones, key=lambda zone: zone['name']))
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise RuntimeError('Cannot list Cloudflare zones; check sign-in and zone permissions') from error
+
+
+def start_cloudflare_login() -> dict:
+    if not shutil.which('cf'):
+        raise ValueError('Cloudflare CLI not found; install it with npm install --global cf')
+    with _cf_login_lock:
+        if _cf_login['state'] in ('running', 'logging_out'):
+            raise RuntimeError('A Cloudflare authentication operation is already running')
+        _cf_login['state'] = 'running'
+
+    def login():
+        try:
+            result = subprocess.run(['cf', 'auth', 'login', '--no-device'], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+            success = result.returncode == 0 and cloudflare_status()['authorized']
+        except (OSError, subprocess.TimeoutExpired):
+            success = False
+        with _cf_login_lock:
+            _cf_login['state'] = 'succeeded' if success else 'failed'
+
+    threading.Thread(target=login, daemon=True).start()
+    return dict(login='running')
+
+
+def cloudflare_logout() -> dict:
+    if not shutil.which('cf'):
+        raise ValueError('Cloudflare CLI not found')
+    with _cf_login_lock:
+        if _cf_login['state'] in ('running', 'logging_out'):
+            raise RuntimeError('A Cloudflare authentication operation is already running')
+        _cf_login['state'] = 'logging_out'
+    try:
+        result = subprocess.run(['cf', 'auth', 'logout'], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError('Cloudflare CLI sign-out failed; run cf auth logout in a terminal')
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError('Cloudflare CLI sign-out failed; run cf auth logout in a terminal') from error
+    finally:
+        with _cf_login_lock:
+            _cf_login['state'] = 'idle'
+    return cloudflare_status()
+
+
 # --------------------------------------------------------------------------- HTTP
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = 'colabllm-ui'
@@ -585,6 +684,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(200, dict(usage=account_usage(force='refresh' in query)))
             if parts == ['doctor']:
                 return self._send(200, doctor(online='online' in query))
+            if parts == ['cloudflare']:
+                return self._send(200, cloudflare_status())
+            if parts == ['cloudflare', 'zones']:
+                return self._send(200, cloudflare_zones())
             if parts == ['operations']:
                 return self._send(200, OPS.list())
             if len(parts) == 2 and parts[0] == 'operations':
@@ -625,6 +728,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(202, start_down_many(body))
             if parts == ['instances', 'delete']:
                 return self._send(202, start_delete_many(body))
+            if parts == ['tunnel-config']:
+                return self._send(200, update_tunnel(body))
+            if parts == ['cloudflare', 'login']:
+                if body:
+                    raise ValueError('Cloudflare sign-in does not accept parameters')
+                return self._send(202, start_cloudflare_login())
+            if parts == ['cloudflare', 'logout']:
+                if body:
+                    raise ValueError('Cloudflare sign-out does not accept parameters')
+                return self._send(200, cloudflare_logout())
             return self._error(404, 'not found')
         except LookupError as error:
             return self._error(404, str(error))

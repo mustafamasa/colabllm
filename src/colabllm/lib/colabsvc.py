@@ -261,18 +261,22 @@ def tunnel_hostname(svc: Service, args) -> str | None:
     return validate_domain(f'{alias}.{base}')
 
 
-def cmd_tunnel_config(args) -> None:
-    path = STATE_ROOT / 'tunnel-config.json'
+def update_tunnel_config(*, base_domain=None, clear=False) -> dict:
     saved=load_tunnel_config()
-    if args.clear:
+    if clear:
         if saved.get('frp',{}).get('enabled'):
             raise ValueError('FRP requires a base domain; disable FRP before clearing it')
         saved.pop('base_domain',None)
         save_tunnel_config(saved)
-    elif args.base_domain is not None:
-        saved['base_domain']=validate_domain(args.base_domain)
+    elif base_domain is not None:
+        saved['base_domain']=validate_domain(base_domain)
         save_tunnel_config(saved)
-    saved = load_tunnel_config()
+    return load_tunnel_config()
+
+
+def cmd_tunnel_config(args) -> None:
+    path = STATE_ROOT / 'tunnel-config.json'
+    saved = update_tunnel_config(base_domain=args.base_domain, clear=args.clear)
     print(json.dumps({'base_domain': saved.get('base_domain'),
                       'transport': 'frp' if saved.get('frp',{}).get('enabled') else 'cloudflare',
                       'frp': saved.get('frp'),

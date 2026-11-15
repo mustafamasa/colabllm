@@ -211,6 +211,8 @@ Başlatma penceresi her servisin kendi `up` seçeneklerini (ör. comfyui `--work
 Durmuş örnekler panelden (tek tek ya da seçerek) silinebilir; bu, `colabllm <runtime> purge` komutunu çalıştırır: önce `colab stop` ile arta kalan oturum kapatılır, sonra yerel kayıt (kimlik bilgileri, `run.log`, notebook kopyası) silinir. Drive verilerine dokunulmaz.
 Paneli kapatmak (Ctrl+C) çalışan servisleri etkilemez.
 
+Overview veya Diagnostics bölümünde **Transport** yanındaki düzenleme düğmesinden yerel `cf` girişini kontrol edebilir, tarayıcıyla oturum açabilir veya varsayılan CLI oturumunu kapatabilirsiniz. Erişilebilir Cloudflare zone'larından birini seçebilir ya da özel alan adı yazabilirsiniz. Alan adını boş bırakmak Quick Tunnel kullanır; FRP etkinse önce FRP'yi devre dışı bırakmak gerekir. `COLABSVC_BASE_DOMAIN` ortam değişkeni kayıtlı alan adını geçersiz kılar. Değişiklikler yalnızca sonraki başlatmaları etkiler. Oturum açma başarısız olursa terminalde `cf auth login` çalıştırın; kimlik bilgileri Cloudflare CLI tarafından saklanır. Farklı bir profil veya ortam tokenı, varsayılan oturum kapatılsa da etkin kalabilir.
+
 ## Zaman aşımları ve ortam tanılama
 
 ```bash

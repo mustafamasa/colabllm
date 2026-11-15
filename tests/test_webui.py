@@ -2,6 +2,7 @@
 import http.client
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -103,6 +104,137 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/overview", host="evil.example:80")[0].status, 421)
         response, _ = self.request("POST", "/api/instances/ollama-2/stop", origin="https://evil.example", body={})
         self.assertEqual(response.status, 403)
+
+    def test_tunnel_config_requires_auth_and_validates_domains(self):
+        self.assertEqual(self.request("POST", "/api/tunnel-config", token=False, body={"base_domain": "example.com"})[0].status, 401)
+        self.assertEqual(self.request("POST", "/api/tunnel-config", origin="https://evil.example", body={"base_domain": "example.com"})[0].status, 403)
+        self.assertEqual(self.request("POST", "/api/tunnel-config", body={"base_domain": "https://example.com"})[0].status, 400)
+        response, data = self.request("POST", "/api/tunnel-config", body={"base_domain": "Example.COM."})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(data)["saved_base_domain"], "example.com")
+        self.assertEqual(colabsvc.load_tunnel_config()["base_domain"], "example.com")
+        response, data = self.request("POST", "/api/tunnel-config", body={"base_domain": ""})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(data)["transport"], "quick")
+
+    def test_tunnel_config_respects_environment_override(self):
+        with patch.dict(os.environ, {"COLABSVC_BASE_DOMAIN": "override.example"}):
+            response, data = self.request("POST", "/api/tunnel-config", body={"base_domain": "saved.example"})
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(data)["base_domain"], "override.example")
+        self.assertEqual(json.loads(data)["saved_base_domain"], "saved.example")
+        colabsvc.update_tunnel_config(clear=True)
+
+    def test_cloudflare_status_does_not_expose_command_output(self):
+        with patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+             patch.object(webui.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout=json.dumps({
+                 'authenticated': True, 'email': 'private@example.com', 'accounts': [{'id': 'private-id'}]
+             }))) as run:
+            response, data = self.request('GET', '/api/cloudflare')
+        self.assertEqual(response.status, 200)
+        self.assertTrue(json.loads(data)['authorized'])
+        self.assertNotIn(b'private', data)
+        self.assertEqual(run.call_args.args[0], ['cf', 'auth', 'whoami', '--json'])
+        self.assertIs(run.call_args.kwargs['stdout'], subprocess.PIPE)
+
+    def test_cloudflare_status_requires_authenticated_json_even_on_success(self):
+        for output in ('{"authenticated": false}', '{"authenticated": true, "tokenValid": false}', 'not json'):
+            with self.subTest(output=output), patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+                 patch.object(webui.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout=output)):
+                response, data = self.request('GET', '/api/cloudflare')
+            self.assertEqual(response.status, 200)
+            self.assertFalse(json.loads(data)['authorized'])
+
+    def test_cloudflare_zones_only_return_valid_names_and_status(self):
+        self.assertEqual(self.request('GET', '/api/cloudflare/zones', token=False)[0].status, 401)
+        data = json.dumps([
+            {'name': 'Example.COM', 'status': 'active', 'id': 'private-id', 'account': {'id': 'private-account'}},
+            {'name': 'https://bad.example', 'status': 'active'},
+            {'name': 'pending.example', 'status': 'pending'},
+        ])
+        with patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+             patch.object(webui.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout=data)) as run:
+            response, raw = self.request('GET', '/api/cloudflare/zones')
+        self.assertEqual(response.status, 200)
+        self.assertEqual(json.loads(raw), {'zones': [{'name': 'example.com', 'status': 'active'},
+                                                    {'name': 'pending.example', 'status': 'pending'}]})
+        self.assertNotIn(b'private-id', raw)
+        self.assertEqual(run.call_args.args[0], ['cf', 'zones', 'list'])
+
+    def test_cloudflare_zones_hides_cli_errors(self):
+        with patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+             patch.object(webui.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, stdout='secret')):
+            response, data = self.request('GET', '/api/cloudflare/zones')
+        self.assertEqual(response.status, 500)
+        self.assertNotIn(b'secret', data)
+
+    def test_cloudflare_login_requires_auth_and_local_cli(self):
+        self.assertEqual(self.request('POST', '/api/cloudflare/login', token=False, body={})[0].status, 401)
+        with patch.object(webui.shutil, 'which', return_value=None):
+            self.assertEqual(self.request('POST', '/api/cloudflare/login', body={})[0].status, 400)
+
+    def test_cloudflare_logout_is_authorized_and_checks_remaining_credentials(self):
+        self.assertEqual(self.request('POST', '/api/cloudflare/logout', token=False, body={})[0].status, 401)
+        self.assertEqual(self.request('POST', '/api/cloudflare/logout', origin='https://evil.example', body={})[0].status, 403)
+        def fake_run(command, **kwargs):
+            return subprocess.CompletedProcess(command, 0, stdout='{"authenticated": false}')
+        with patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+             patch.object(webui.subprocess, 'run', side_effect=fake_run) as run:
+            response, data = self.request('POST', '/api/cloudflare/logout', body={})
+        self.assertEqual(response.status, 200)
+        self.assertFalse(json.loads(data)['authorized'])
+        self.assertEqual(run.call_args_list[0].args[0], ['cf', 'auth', 'logout'])
+        self.assertEqual(run.call_args_list[1].args[0], ['cf', 'auth', 'whoami', '--json'])
+        self.assertIs(run.call_args_list[0].kwargs['stdout'], subprocess.DEVNULL)
+
+    def test_cloudflare_logout_failure_and_concurrent_login_are_safe(self):
+        with patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+             patch.object(webui.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)):
+            self.assertEqual(self.request('POST', '/api/cloudflare/logout', body={})[0].status, 409)
+        with webui._cf_login_lock:
+            webui._cf_login['state'] = 'running'
+        try:
+            with patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+                 patch.object(webui.subprocess, 'run') as run:
+                self.assertEqual(self.request('POST', '/api/cloudflare/logout', body={})[0].status, 409)
+                run.assert_not_called()
+        finally:
+            with webui._cf_login_lock:
+                webui._cf_login['state'] = 'idle'
+
+    def test_cloudflare_login_runs_browser_callback_and_checks_identity(self):
+        completed = threading.Event()
+        calls = []
+        def fake_run(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[2] == 'whoami':
+                completed.set()
+            return subprocess.CompletedProcess(command, 0, stdout='{"authenticated": true}')
+        with patch.object(webui.shutil, 'which', return_value='/usr/bin/cf'), \
+             patch.object(webui.subprocess, 'run', side_effect=fake_run):
+            response, _ = self.request('POST', '/api/cloudflare/login', body={})
+            self.assertEqual(response.status, 202)
+            self.assertTrue(completed.wait(2))
+            for _ in range(50):
+                with webui._cf_login_lock:
+                    state = webui._cf_login['state']
+                if state != 'running':
+                    break
+                time.sleep(0.01)
+        self.assertEqual(state, 'succeeded')
+        self.assertEqual(calls[0][0], ['cf', 'auth', 'login', '--no-device'])
+        self.assertEqual(calls[1][0], ['cf', 'auth', 'whoami', '--json'])
+        self.assertIs(calls[0][1]['stdout'], subprocess.DEVNULL)
+        with webui._cf_login_lock:
+            webui._cf_login['state'] = 'idle'
+
+    def test_tunnel_clear_keeps_enabled_frp_configuration(self):
+        config = {'base_domain': 'example.com', 'frp': {'enabled': True}}
+        with patch.object(colabsvc, 'load_tunnel_config', return_value=config), \
+             patch.object(colabsvc, 'save_tunnel_config') as save:
+            response, _ = self.request('POST', '/api/tunnel-config', body={'base_domain': ''})
+        self.assertEqual(response.status, 400)
+        save.assert_not_called()
 
     def test_static_paths_cannot_escape_assets(self):
         for path in ("/../lib/webui.py", "/%2e%2e/cli.py", "/app.py", "/nested/app.js"):
