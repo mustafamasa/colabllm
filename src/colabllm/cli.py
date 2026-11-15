@@ -3,11 +3,13 @@
 import math
 import os
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parent
 GLOBAL_COMMANDS = ('tunnel-config', 'frp-config', 'frp-status')
 UTILITY_COMMANDS = ('doctor', 'completion', 'skill', 'ui')
+_ACCOUNT_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$')
 
 
 def services():
@@ -22,6 +24,11 @@ def _valid_timeout(raw):
         return math.isfinite(val) and val > 0
     except (TypeError, ValueError):
         return False
+
+
+def _valid_account(raw):
+    val = (raw or '').strip() if isinstance(raw, str) else ''
+    return bool(val and '..' not in val and _ACCOUNT_RE.fullmatch(val))
 
 
 def _package_version():
@@ -54,6 +61,18 @@ def main(argv=None):
                 print('colabllm: --command-timeout requires a finite number of seconds greater than 0', file=sys.stderr)
                 return 2
             flags.append(argv.pop(0))
+        elif argv[0].startswith('--account='):
+            arg = argv.pop(0)
+            if not _valid_account(arg.split('=', 1)[1]):
+                print('colabllm: --account requires a valid Colab account name or email', file=sys.stderr)
+                return 2
+            flags.append(arg)
+        elif argv[0] == '--account':
+            flags.append(argv.pop(0))
+            if not argv or not _valid_account(argv[0]):
+                print('colabllm: --account requires a valid Colab account name or email', file=sys.stderr)
+                return 2
+            flags.append(argv.pop(0))
         else:
             break
     if len(argv) > 1 and argv[0] == 'help':
@@ -67,11 +86,12 @@ def main(argv=None):
               'Global commands: ' + ', '.join((*GLOBAL_COMMANDS, *UTILITY_COMMANDS)) + '\n\n'
               'Examples:\n'
               '  colabllm unlimited-ocr up\n'
+              '  colabllm unlimited-ocr up -a work --drive-account main\n'
               '  colabllm unlimited-ocr ocr ./documents -O ./results\n'
               '  colabllm qwen3-tts up -i 2\n'
               '  colabllm tunnel-config\n'
               '  colabllm ui                      # local web control panel\n\n'
-              'Global options: --debug, --quiet, --no-color, --command-timeout SECONDS\n'
+              'Global options: --account ACCOUNT, --debug, --quiet, --no-color, --command-timeout SECONDS\n'
               'colabllm services lists the runtimes; <runtime> --help shows its commands and arguments.')
         return 0
     if argv == ['--version']:

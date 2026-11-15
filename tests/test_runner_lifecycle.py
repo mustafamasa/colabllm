@@ -20,33 +20,68 @@ class RunnerLifecycleTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        root_dir = self.root
         class Health(BaseHTTPRequestHandler):
             def log_message(self, *args): pass
             def do_GET(self):
-                self.send_response(200); self.end_headers(); self.wfile.write(b'ok')
+                code = 502 if (root_dir / 'http-502').exists() else 200
+                self.send_response(code); self.end_headers(); self.wfile.write(b'ok' if code == 200 else b'bad gateway')
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Health)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         executable = self.root / 'colab'
         executable.write_text('''#!/usr/bin/env python3
+import json
 import os
 from pathlib import Path
 import sys
 import time
 root = Path(os.environ['FAKE_COLAB_ROOT'])
-if sys.argv[1] == 'exec':
+with (root / 'colab-calls.jsonl').open('a', encoding='utf-8') as logf:
+    logf.write(json.dumps(sys.argv[1:]) + '\\n')
+cmd = sys.argv[1] if len(sys.argv) > 1 else ''
+if cmd == 'status':
+    if (root / 'session-missing').exists():
+        print("[colab] Session 'ollama-test' not found.", flush=True)
+    elif (root / 'session-alive').exists():
+        print("[ollama-test] gpu-t4-s-fake | Hardware: T4 | Status: BUSY", flush=True)
+    sys.exit(0)
+if cmd == 'new':
+    if (root / 'fail-new-once').exists():
+        (root / 'fail-new-once').unlink()
+        print('GPU capacity temporarily unavailable', file=sys.stderr)
+        sys.exit(1)
+    if (root / 'new-clears-502').exists():
+        (root / 'http-502').unlink(missing_ok=True)
+    (root / 'session-missing').unlink(missing_ok=True)
+    sys.exit(0)
+if cmd == 'exec':
+    count_file = root / 'exec-count'
+    count = int(count_file.read_text()) + 1 if count_file.exists() else 1
+    count_file.write_text(str(count))
     if (root / 'exit-before-ready').exists():
         sys.exit(0)
+    if count >= 2 and (root / 'queued-behind-busy-kernel').exists():
+        # Simulate re-attaching `colab exec` to a live VM whose Jupyter kernel is still blocked in Cell 5
+        while True:
+            time.sleep(1)
     print('CT_PUBLIC_URL=' + os.environ['FAKE_COLAB_URL'], flush=True)
     if (root / 'false-ready').exists():
         print('ERROR: expected CT_READY but startup failed', flush=True)
         sys.exit(0)
     if not (root / 'never-ready').exists():
         print('CT_READY', flush=True)
+    if (root / 'crash-once-after-ready').exists():
+        (root / 'crash-once-after-ready').unlink()
+        time.sleep(0.05)
+        sys.exit(1)
+    if (root / 'crash-always-after-ready').exists():
+        time.sleep(0.05)
+        sys.exit(1)
     while True:
         time.sleep(1)
-if sys.argv[1] == 'stop' and (root / 'fail-stop').exists():
+if cmd == 'stop' and (root / 'fail-stop').exists():
     print('simulated remote failure', file=sys.stderr)
     sys.exit(42)
 ''')
@@ -146,6 +181,152 @@ if sys.argv[1] == 'stop' and (root / 'fail-stop').exists():
         self.assertEqual(stop.returncode, 0, stop.stderr)
         front.wait(timeout=5)
         self.assertFalse(owned_process(st['exec_pid'], st['exec_identity']))
+
+    def colab_calls(self):
+        path = self.root / 'colab-calls.jsonl'
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    def wait_restart_ready(self, min_restarts=1):
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if self.state_path.exists():
+                st = json.loads(self.state_path.read_text())
+                if st.get('ready') and int(st.get('restart_count') or 0) >= min_restarts and st.get('exec_identity'):
+                    return st
+            time.sleep(0.02)
+        self.fail(f'auto-restart never reached restart_count >= {min_restarts}')
+
+    def test_auto_restart_recreates_reclaimed_vm_and_stops_cleanly_on_down(self):
+        (self.root / 'crash-once-after-ready').touch()
+        (self.root / 'session-missing').touch()
+        (self.root / 'fail-new-once').touch()
+        start = self.cli(
+            'up', '--quick-tunnel', '--gpu', 'L4', '--auto-restart', '--restart-delay', '.05', '--detach'
+        )
+        # Note: initial `up` consumes `fail-new-once`? Keep `fail-new-once` only for the restart cycle:
+        self.assertNotEqual(start.returncode, 0)
+        # Now run clean initial start and fail the first restart `colab new` once to verify backoff recovery:
+        (self.root / 'colab-calls.jsonl').unlink(missing_ok=True)
+        (self.root / 'crash-once-after-ready').touch()
+        start = self.cli(
+            'up', '--quick-tunnel', '--gpu', 'L4', '--auto-restart', '--restart-delay', '.05', '--detach'
+        )
+        self.assertEqual(start.returncode, 0, start.stderr)
+        (self.root / 'session-missing').touch()
+        (self.root / 'fail-new-once').touch()
+        st = self.wait_restart_ready(min_restarts=1)
+        self.assertTrue(st['auto_restart'])
+        self.assertEqual(st['session_gpu'], 'L4')
+        status = self.cli('status', '--json')
+        self.assertEqual(status.returncode, 0, status.stderr)
+        payload = json.loads(status.stdout)
+        self.assertTrue(payload['ready'])
+        self.assertTrue(payload['auto_restart'])
+        self.assertEqual(payload['restart_count'], 1)
+
+        calls = self.colab_calls()
+        new_calls = [c for c in calls if c[:1] == ['new']]
+        mount_calls = [c for c in calls if c[:2] == ['dfs', 'mount']]
+        # 1 initial `new` + 1 failed restart `new` + 1 succeeded restart `new` = 3, all preserving `--gpu L4`
+        self.assertEqual(len(new_calls), 3, calls)
+        for call in new_calls:
+            self.assertIn('L4', call)
+        self.assertGreaterEqual(len(mount_calls), 2, calls)
+
+        stop = self.cli('down')
+        self.assertEqual(stop.returncode, 0, stop.stderr)
+        self.assertFalse(owned_process(st['runner_pid'], st['runner_identity']))
+        self.assertFalse(owned_process(st['exec_pid'], st['exec_identity']))
+
+    def test_auto_restart_reuses_live_vm_on_transient_exec_disconnect(self):
+        (self.root / 'crash-once-after-ready').touch()
+        (self.root / 'session-alive').touch()
+        (self.root / 'queued-behind-busy-kernel').touch()
+        start = self.cli(
+            'up', '--quick-tunnel', '--no-drive', '--auto-restart',
+            '--restart-delay', '.05', '--ready-timeout', '.25', '--detach',
+        )
+        self.assertEqual(start.returncode, 0, start.stderr)
+        st = self.wait_restart_ready(min_restarts=1)
+        status = self.cli('status', '--json')
+        self.assertEqual(status.returncode, 0, status.stderr)
+        payload = json.loads(status.stdout)
+        self.assertTrue(payload['ready'])
+        self.assertEqual(payload['http_status'], '200')
+        # Ensure ready_timeout (.25s) does NOT tear down an already-healthy re-attached VM:
+        time.sleep(0.35)
+        self.assertEqual(json.loads(self.state_path.read_text())['restart_count'], 1)
+        calls = self.colab_calls()
+        new_calls = [c for c in calls if c[:1] == ['new']]
+        stop_calls = [c for c in calls if c[:1] == ['stop']]
+        # Initial `new` only; transient disconnect with `session-alive` must NOT destroy or recreate the VM!
+        self.assertEqual(len(new_calls), 1, calls)
+        self.assertEqual(len(stop_calls), 0, calls)
+        self.assertEqual(self.cli('down').returncode, 0)
+        self.assertFalse(owned_process(st['runner_pid'], st['runner_identity']))
+
+    def test_auto_restart_detects_half_open_dead_session_and_recovers(self):
+        self.env['COLABLLM_IDLE_CHECK_SECONDS'] = '0.12'
+        start = self.cli(
+            'up', '--quick-tunnel', '--no-drive', '--auto-restart', '--restart-delay', '.05', '--detach'
+        )
+        self.assertEqual(start.returncode, 0, start.stderr)
+        first = self.wait_ready()
+        # Simulate remote Colab reclaiming the VM while local `colab exec` hangs silently (half-open TCP):
+        (self.root / 'session-missing').touch()
+        restarted = self.wait_restart_ready(min_restarts=1)
+        self.assertNotEqual(restarted['exec_pid'], first['exec_pid'])
+        self.assertEqual(restarted['api_token'], first['api_token'])
+        self.assertEqual(self.cli('down').returncode, 0)
+
+    def test_auto_restart_fast_edge_probe_detects_502_immediately_without_waiting_idle_check(self):
+        # Keep idle_check huge (300s), so ONLY the fast edge probe (0.08s) can trigger immediate recovery:
+        self.env['COLABLLM_IDLE_CHECK_SECONDS'] = '300'
+        self.env['COLABLLM_FAST_PROBE_SECONDS'] = '0.08'
+        start = self.cli('up', '--quick-tunnel', '--no-drive', '--auto-restart', '--detach')
+        self.assertEqual(start.returncode, 0, start.stderr)
+        first = self.wait_ready()
+
+        # Subcase A: transient 502 while remote Colab VM is still ALIVE must NOT kill or recreate the VM:
+        (self.root / 'session-alive').touch()
+        (self.root / 'http-502').touch()
+        time.sleep(0.25)
+        self.assertEqual(json.loads(self.state_path.read_text()).get('restart_count', 0), 0)
+
+        # Subcase B: 502 + remote Colab VM MISSING triggers immediate restart without waiting 300s:
+        (self.root / 'http-502').unlink()
+        time.sleep(0.12)  # 200 resets status check cooldown
+        (self.root / 'session-alive').unlink()
+        (self.root / 'new-clears-502').touch()
+        (self.root / 'http-502').touch()
+        (self.root / 'session-missing').touch()
+        restarted = self.wait_restart_ready(min_restarts=1)
+        self.assertNotEqual(restarted['exec_pid'], first['exec_pid'])
+        self.assertEqual(self.cli('down').returncode, 0)
+
+    def test_auto_restart_stops_after_consecutive_pre_ready_startup_failures(self):
+        self.env['COLABLLM_MAX_STARTUP_RETRIES'] = '2'
+        (self.root / 'exit-before-ready').touch()
+        result = self.cli(
+            'up', '--quick-tunnel', '--no-drive', '--foreground', '--auto-restart', '--restart-delay', '.02'
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        exec_calls = [c for c in self.colab_calls() if c[:1] == ['exec']]
+        self.assertEqual(len(exec_calls), 2)
+
+    def test_auto_restart_respects_max_restarts_cap(self):
+        (self.root / 'crash-always-after-ready').touch()
+        (self.root / 'session-missing').touch()
+        result = self.cli(
+            'up', '--quick-tunnel', '--no-drive', '--foreground',
+            '--auto-restart', '--restart-delay', '.02', '--max-restarts', '1',
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        exec_calls = [c for c in self.colab_calls() if c[:1] == ['exec']]
+        # 1 initial run + 1 allowed auto-restart = 2 total `colab exec` runs
+        self.assertEqual(len(exec_calls), 2)
 
 
 if __name__ == '__main__':

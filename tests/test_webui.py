@@ -25,6 +25,9 @@ class CatalogTest(unittest.TestCase):
         for item in webui.catalog():
             self.assertIn(item["default_gpu"], (*webui.GPUS, "none"))
             self.assertNotIn("notebook:", item["summary"])
+        minimax = next(item for item in webui.catalog() if item["name"] == "minimax-h3-image")
+        self.assertEqual(minimax["category"], "Image")
+        self.assertIn("/mustafamasa/colabllm/blob/english/docs/", minimax["docs"])
 
     def test_assets_exist_and_have_no_inline_script(self):
         html = (webui.ASSETS_DIR / "index.html").read_text(encoding="utf-8")

@@ -2,10 +2,10 @@
 
 ## First-use dependencies
 
-Run `colabllm doctor`; inspect structured results with `--json`. Local dependencies include Python
-3.12+, installed Colab CLI and its separate Drive extension. A successful `colab version` alone does
-not prove `colab dfs` is installed. Follow the installed distribution's prerequisite documentation for
-the extension; this skill does not contain it. `doctor --online --timeout 10` additionally checks
+Run `colabllm doctor` (or `colabllm doctor -a ACCOUNT [--drive-account STORAGE]`); inspect structured results with `--json`. Local dependencies include Python
+3.12+, installed Colab CLI and its separate `colab-ext` extension. A successful `colab version` alone does
+not prove Drive/multi-account extension (`colab drive` / `colab dfs`) is installed; follow the installed distribution's prerequisite documentation for
+the extension (`colab ext doctor`). When `accounts.json` exists under `~/.config/colab-cli/`, `doctor` checks the active or specified account's Drive binding and per-account `dfs_credentials.json`; `doctor --online --timeout 10` additionally checks
 selected backend authorization without creating a GPU session or opening a browser.
 
 Google/Drive and Cloudflare login may need human interaction. Report the exact missing prerequisite;
@@ -38,9 +38,10 @@ resource ownership before a targeted repair; back up private configuration befor
 | --- | --- |
 | `up` timed out | Inspect `status --json` and `logs -n 100`; default-mode runner remains alive |
 | 502 while starting | Inspect model loading and tunnel logs; do not repeatedly submit startup |
-| `running: true`, but no real VM | Compare `colab sessions` and runner ownership; a PID alone is insufficient |
+| `running: true`, but no real VM | Compare `colab sessions --all` (or `colab -a <account> sessions`) and runner ownership; a PID alone is insufficient |
 | No visible API token | Use `info --show-secrets`; credentials are redacted by default |
 | 401 with saved token | Confirm the runtime/instance, URL origin and actual server key |
+| Wrong account or missing Drive credentials in multi-account setup | Inspect `colabllm <service> info --json`, `colab account status`, and `colabllm doctor -a <account>` |
 | New `colab exec` never executes | Last notebook cell intentionally blocks; use logs/HTTP instead |
 | Failed `down` | Tracking is preserved; resolve the error and retry, instead of deleting state |
 | Job wait interrupted | Save the job ID and query it later; do not assume it was cancelled |

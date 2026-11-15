@@ -3,9 +3,10 @@ name: colabllm
 description: >-
   Use installed colabllm runtimes on Google Colab for LLM inference, PDF/image OCR,
   speech transcription, speech synthesis, voice cloning, sound-effect/audio generation,
-  avatar/video generation, ComfyUI and Unsloth Studio. Use when the user asks to start,
-  query, call or stop these runtimes, retrieve their API key, or troubleshoot a colabllm
-  service. Intended for package users; runtime development and notebook editing are outside scope.
+  image generation, multi-reference image editing, avatar/video generation, ComfyUI and
+  Unsloth Studio. Use when the user asks to start, query, call or stop these runtimes,
+  retrieve their API key, or troubleshoot a colabllm service. Intended for package users;
+  runtime development and notebook editing are outside scope.
 ---
 
 # ColabLLM runtimes
@@ -26,7 +27,7 @@ colabllm <service> <command> --help
 If the command is missing, use the user's supplied wheel or package source. A distributed wheel
 installs with `uv tool install /path/to/colabllm-VERSION-py3-none-any.whl`; use
 `uv tool install colabllm` only when that package has actually been published to the intended index.
-`colab`, its Drive extension and authorization are separate prerequisites. Local model libraries
+`colab`, its `colab-ext` Drive/multi-account extension (`colab drive`/`dfs`, `colab account`, `colab ext`) and authorization are separate prerequisites. Local model libraries
 such as Torch, CUDA and NumPy are unnecessary; computation occurs in Colab.
 
 | Task | Runtime | Reference to read |
@@ -46,6 +47,7 @@ such as Torch, CUDA and NumPy are unnecessary; computation occurs in Colab.
 | Motion transfer, object/face/color video CLI & UI | `openjutsu` | [Openjutsu](references/openjutsu.md) |
 | Text-to-image, multi-ref image editing & Drive I/O | `flux-klein` | [FLUX 3 Image Klein](references/flux-klein.md) |
 | Bilingual T2I, 1-4 `<imageN>` RGBA editing & Drive I/O | `qwen-image` | [Qwen-Image-2.1](references/qwen-image.md) |
+| Native 4K 6-step PDD T2I, 1-16 `<Picture N>` editing & async jobs | `minimax-h3-image` | [MiniMax-H3-Image](references/minimax-h3-image.md) |
 | Workflow models, queue and image/video UI | `comfyui` | [ComfyUI](references/comfyui.md) |
 | Training, inference and export UI | `unsloth-studio` | [Unsloth Studio](references/unsloth-studio.md) |
 
@@ -68,11 +70,24 @@ colabllm <service> logs -n 100
 
 Choose an instance explicitly with `-i ID` when needed, consistently for startup, calls and queries.
 IDs contain 1–64 ASCII letters, digits, underscores or hyphens, with no leading hyphen.
+In multi-account setups (`colab-ext`), select the compute account via `--account NAME_OR_EMAIL`
+(short `-a` also works on `up` and `doctor`; do NOT pass `-a` to business subcommands where `-a`
+may mean `--aspect`, use `--account` there) or `COLABLLM_ACCOUNT` / `COLAB_ACCOUNT`, and optionally
+override the shared Google Drive storage account via `up --drive-account NAME_OR_EMAIL`.
+Each launched instance pins its resolved `account` and `drive_account` in `state.json`, so subsequent
+`--auto-restart`, `status`, and `down` stay pinned to that account even if `colab account use`
+switches the active account later.
 `up` may allocate a paid GPU session and install/download large remote dependencies. Choose a GPU
 override only when requested or compatible with the runtime; do not silently downgrade hardware.
 
 Default `up` waits for readiness. `up --detach` only launches a runner; poll `status --json` until
-`running` and `ready` are true. A reachable domain or 502 during loading is not model readiness.
+`running` and `ready` are true. `up --auto-restart` (optional `--idle-check SECONDS`,
+`--restart-delay SECONDS`, `--max-restarts N`) supervises the runtime after launch: if `colab exec`
+disconnects (checked after `3s` by default) or the `10s` edge HTTP probe / `300s` `--idle-check`
+detects a reclaimed VM (`colab status` reports `not found`), it re-attaches live VMs (preserving
+`ready` when the authenticated endpoint responds) or immediately recreates and re-mounts reclaimed
+VMs while preserving fixed domains and `api_token`; `down` stops it cleanly.
+A reachable domain or 502 during loading is not model readiness.
 Use `up --ready-timeout SECONDS` for a suitable startup wait and `--command-timeout SECONDS` for
 external command limits. Exit 124 means timeout; default startup timeout leaves the runner active.
 Inspect state/logs before retrying startup. The local machine must remain online: its detached runner

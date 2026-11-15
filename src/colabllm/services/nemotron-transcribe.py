@@ -67,6 +67,7 @@ from colabsvc import (  # noqa: E402
     Service,
     State,
     apply_instance,
+    colab_env_for_session,
     die,
     list_service_instances,
     log,
@@ -452,6 +453,8 @@ def _download_media_locally_and_upload_to_drive(
     if fmt not in ("mp3", "m4a", "wav", "opus", "flac"):
         fmt = "mp3"
 
+    colab_env = colab_env_for_session(session_name, SERVICE.account)
+
     # Ensure remote directory exists on mounted Google Drive. The kernel is busy (blocked in the
     # keep-alive cell) while the service runs, so this is best effort and must never hang the CLI.
     try:
@@ -460,6 +463,7 @@ def _download_media_locally_and_upload_to_drive(
             capture_output=True,
             text=True,
             timeout=command_timeout(30),
+            env=colab_env,
             check=False,
         )
     except subprocess.TimeoutExpired:
@@ -534,6 +538,7 @@ def _download_media_locally_and_upload_to_drive(
                 capture_output=True,
                 text=True,
                 timeout=command_timeout(300),
+                env=colab_env,
                 check=False,
             )
             if up_res.returncode != 0:
@@ -564,6 +569,7 @@ def _colab_ls_single(session_name: str, remote_path: str) -> tuple[list[str], li
         capture_output=True,
         text=True,
         timeout=command_timeout(30),
+        env=colab_env_for_session(session_name, SERVICE.account),
         check=False,
     )
     if res.returncode != 0:

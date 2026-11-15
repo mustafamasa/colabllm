@@ -62,8 +62,26 @@ class LifecycleSafetyTest(unittest.TestCase):
         self.state.log_path.write_text('log')
         with patch.object(svc, 'run', return_value=argparse.Namespace(returncode=0)) as run, patch('sys.stderr'):
             svc.cmd_purge(self.service, self.purge_args())
-        run.assert_called_once_with(['colab', 'stop', '-s', 'test'], check=False)
+        run.assert_called_once_with(['colab', 'stop', '-s', 'test'], check=False, env=svc.colab_subprocess_env())
         self.assertFalse(self.state.dir.exists())
+
+    def test_purge_uses_saved_account_even_when_active_environment_changes(self):
+        self.state.save(account='original', drive_account='shared')
+        with patch.dict(os.environ, {'COLABLLM_ACCOUNT': 'other', 'COLAB_ACCOUNT': 'other'}), \
+             patch.object(svc, 'run', return_value=argparse.Namespace(returncode=0)) as run:
+            svc.cmd_purge(self.service, self.purge_args())
+        self.assertEqual(run.call_args.kwargs['env']['COLAB_ACCOUNT'], 'original')
+        self.assertEqual(run.call_args.kwargs['env']['COLAB_DRIVE_ACCOUNT'], 'shared')
+        self.assertFalse(self.state.dir.exists())
+
+    def test_purge_refuses_an_explicit_different_account(self):
+        self.state.save(account='original')
+        self.service.account = 'other'
+        with patch.object(svc, 'resolve_effective_account', return_value=('other', 'flag')), \
+             patch.object(svc, 'run') as run, self.assertRaisesRegex(CliError, 'belongs to account'):
+            svc.cmd_purge(self.service, self.purge_args())
+        run.assert_not_called()
+        self.assertTrue(self.state.path.exists())
 
     def test_purge_refuses_running_instance_and_keeps_state(self):
         before = self.state.save(runner_pid=os.getpid(), runner_identity=processes.process_identity(os.getpid()))
@@ -159,6 +177,45 @@ class LifecycleSafetyTest(unittest.TestCase):
         processes.stop_owned_process(child.pid, identity, group=True)
         child.wait(timeout=5)
         self.assertFalse(processes.owned_process(child.pid, identity))
+
+    def test_parse_colab_session_status_detects_missing_despite_zero_exit(self):
+        self.assertEqual(
+            svc.parse_colab_session_status(
+                'qwen-flash',
+                0,
+                '[qwen-flash] gpu-g4-s-asso1c0 | Hardware: G4 | Status: BUSY',
+            ),
+            'alive',
+        )
+        self.assertEqual(
+            svc.parse_colab_session_status(
+                'minimax-h3-image',
+                0,
+                "[colab] Session 'minimax-h3-image' not found.",
+            ),
+            'missing',
+        )
+        self.assertEqual(svc.parse_colab_session_status('ollama', 0, ''), 'unknown')
+
+    def test_restart_tuning_flags_require_auto_restart(self):
+        args = self.args(auto_restart=False, restart_delay=10.0, max_restarts=0)
+        with self.assertRaisesRegex(ValueError, '--auto-restart'):
+            svc.cmd_up(self.service, self.script, args)
+        args2 = self.args(auto_restart=False, restart_delay=None, max_restarts=2)
+        with self.assertRaisesRegex(ValueError, '--auto-restart'):
+            svc.cmd_up(self.service, self.script, args2)
+
+    def test_ensure_session_recreates_when_cached_session_was_reclaimed(self):
+        fake_home = self.root / 'home'
+        cfg_dir = fake_home / '.config/colab-cli'
+        cfg_dir.mkdir(parents=True)
+        (cfg_dir / 'sessions.json').write_text(json.dumps({'test': {'id': 'stale'}}))
+        with patch.object(svc.Path, 'home', return_value=fake_home), \
+             patch.object(svc, 'check_remote_session', return_value='missing'), \
+             patch.object(svc, 'run') as mock_run:
+            svc.ensure_session(self.service)
+        cmds = [call.args[0] for call in mock_run.call_args_list]
+        self.assertEqual(cmds, [['colab', 'stop', '-s', 'test'], ['colab', 'new', '-s', 'test', '--gpu', 'T4']])
 
 
 if __name__ == '__main__':

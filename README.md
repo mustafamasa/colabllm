@@ -148,23 +148,23 @@ uv tool install --force .
 uv build --no-sources
 
 # Wheel'in izole ortamda kurulup çalıştığını doğrula
-python tools/check_distribution.py dist/colabllm-0.1.5-py3-none-any.whl
+python tools/check_distribution.py dist/colabllm-0.1.10-py3-none-any.whl
 ```
 
 Sürüm numarasının tek kaynağı `pyproject.toml`'dur; CLI sürümü kurulu paketin meta verisinden okur.
 `MAJOR.MINOR.PATCH` kullanılır: düzeltmeler PATCH'i, yeni özellikler MINOR'u, uyumsuz değişiklikler MAJOR'u artırır;
 `0.x` geliştirme aşamasında uyumsuz değişiklikler MINOR'u artırır ve [CHANGELOG.md](https://github.com/mustafamasa/colabllm/blob/english/CHANGELOG.md) içinde açıklanır.
-Güncel sürüm `0.1.5`, Git etiketi `v0.1.5`'tir (`0.1.0` geri çekildi); sonraki bir yayın örneği:
+Güncel sürüm `0.1.10`, Git etiketi `v0.1.10`'dur (`0.1.0` geri çekildi); sonraki bir yayın örneği:
 
 ```bash
 uv version --bump patch
 # CHANGELOG.md içindeki Unreleased bölümünü bu sürümün tarihli girdisine taşı
-python tools/check_release.py --tag v0.1.6
+python tools/check_release.py --tag v0.1.11
 git add pyproject.toml CHANGELOG.md
-git commit -m "chore: release 0.1.6"
-git tag -a v0.1.6 -m "Release 0.1.6"
+git commit -m "chore: release 0.1.11"
+git tag -a v0.1.11 -m "Release 0.1.11"
 git push origin english
-git push origin v0.1.6
+git push origin v0.1.11
 ```
 
 `v*` etiketinin gönderilmesi [release.yml](https://github.com/mustafamasa/colabllm/blob/english/.github/workflows/release.yml) iş akışını tetikler:
@@ -190,6 +190,8 @@ Yerel wheel ile kuranlar yeni wheel'i kurarak, GitHub'dan kuranlar `uv tool inst
 - Başarıda çıkış kodu 0; işlem hatasında sıfırdan farklı, argüman kullanım hatasında 2; dış Colab komutu başarısız olursa onun pozitif çıkış kodu korunur; Ctrl+C 130.
 - Hazır işareti olarak yalnızca tam bir `CT_READY` protokol satırı kabul edilir; loglarda geçen sıradan metinler hazır sayılmaz.
 - `up` varsayılan olarak `CT_READY` bekler; bekleme zaman aşımına uğrarsa hata döner ama arka plandaki runner kalır. `up --detach` yalnızca arka plan runner'ını başlatıp hemen döner; `up --foreground` bağlantıyı mevcut terminalde tutar.
+- `up --auto-restart`, bağlantı kesildiğinde canlı VM'e yeniden bağlanır veya geri alınan VM'i yeniden oluşturur. `--restart-delay`, `--idle-check` ve `--max-restarts` ile ayarlanır; `down` otomatik yeniden başlatmayı durdurur.
+- `--account ACCOUNT` veya `up -a ACCOUNT` Colab hesabını seçer; `up --drive-account ACCOUNT` paylaşılan Drive hesabını belirtir. Hesaplar örnek durumuna kaydedilir ve sonraki durum, durdurma ve yeniden başlatma işlemlerinde korunur.
 - Aynı örnek için başlatma ve durdurma birbirini dışlar; durum işlemleri dosya kilidi ve atomik değiştirme kullanır. Ön plan/arka plan runner'ları süreç başlangıç kimliğini kaydeder, durdurmadan önce kimliği doğrular ve çıkışı bekler.
 - `down` önce uzaktaki durdurmanın başarılı olduğunu doğrular, sonra yerel bağlantıyı durdurup çalışma durumunu temizler; uzaktaki durdurma başarısız olursa yeniden deneme için bağlantı ve takip bilgileri korunur.
 - Kimlik bilgisi taşıyan HTTP istekleri farklı kökene yönlendirmeyi reddeder. `--url` veya servis URL ortam değişkeniyle köken değiştirildiğinde token'ın açıkça verilmesi gerekir; asıl servisin kimlik bilgileri otomatik ödünç alınmaz. Köken; şema, ana makine ve geçerli porta göre karşılaştırılır.
@@ -221,11 +223,13 @@ colabllm ollama up --foreground --ready-timeout 600
 
 # Yoklama bekleme sınırı: 0 sınırsız bekler; her istek de kalan süreyle sınırlanır
 colabllm unlimited-ocr job JOB_ID --wait --timeout 300
+colabllm minimax-h3-image job JOB_ID --wait --timeout 300
 colabllm comfyui pull-workflow TEMPLATE --timeout 300 --poll 2
 colabllm longcat-avatar job JOB_ID --wait --timeout 300
 
 # Varsayılan olarak yalnızca yerel bağımlılıkları, Drive eklentisini, yetki dosyalarının varlığını ve kullanıcı yapılandırmasını denetler
 colabllm doctor
+colabllm doctor -a gpu2 --online --timeout 10
 colabllm doctor --json --transport quick --no-drive
 
 # Ek olarak Colab, Cloudflare ve SSH yetkilerini seçilen arka uca göre süre sınırlı, salt okunur şekilde doğrular
@@ -301,6 +305,7 @@ Yerel testlerdeki gerçek FRP entegrasyon testi için ayrıca `COLABSVC_FRP_TEST
 | **LongCat-Video-Avatar 1.5** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-avatar.example.com` | [docs/longcat-avatar.md](https://github.com/mustafamasa/colabllm/blob/english/docs/longcat-avatar.md) |
 | **LongCat-Video** | `G4` | Caddy (Basic Auth + Bearer) | `https://longcat-video.example.com` | [docs/longcat-video.md](https://github.com/mustafamasa/colabllm/blob/english/docs/longcat-video.md) |
 | **Openjutsu (MiniMax H3 Video Studio)** | `G4` | Caddy (Basic Auth + Bearer) | `https://openjutsu.example.com` | [docs/openjutsu.md](https://github.com/mustafamasa/colabllm/blob/english/docs/openjutsu.md) |
+| **MiniMax-H3-Image (4K ve 1-16 referans görsel)** | `G4` | SGLang Diffusion Bearer API Key | `https://minimax-h3-image.example.com` | [docs/minimax-h3-image.md](https://github.com/mustafamasa/colabllm/blob/english/docs/minimax-h3-image.md) |
 | **FLUX 3 Image Klein (T2I + Multi-Ref I2I + PUP)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://flux-klein.example.com` | [docs/flux-klein.md](https://github.com/mustafamasa/colabllm/blob/english/docs/flux-klein.md) |
 | **Qwen-Image-2.1 (T2I + 1-4 Ref RGBA I2I)** | `G4` | `vLLM-Omni` Bearer API Key (`builtin`) | `https://qwen-image.example.com` | [docs/qwen-image.md](https://github.com/mustafamasa/colabllm/blob/english/docs/qwen-image.md) |
 | **ComfyUI + ComfyUI-Manager** | `L4` | Caddy (Basic Auth + Bearer) | `https://comfyui.example.com` | [docs/comfyui.md](https://github.com/mustafamasa/colabllm/blob/english/docs/comfyui.md) |
@@ -351,7 +356,7 @@ Yerel makine Colab oturumlarını oluşturur, tünelleri yapılandırır, Drive'
 | Python 3.12+ | Zorunlu | `src/colabllm/services/*.py` ve `src/colabllm/control.py`'yi çalıştırır, `google-colab-cli`'ın Python gereksinimini karşılar |
 | `uv` | Paket kurulumu ve güncelleme | colabllm ve Colab CLI'ı izole kurar; Git yalnızca geliştirme için gerekir |
 | `colab` CLI | Zorunlu | PyPI paketi `google-colab-cli`; oturumlar, dosya işlemleri ve notebook çalıştırma için |
-| `colab dfs` eklentisi | Varsayılan Drive akışı için zorunlu | [colab-dfs-ext](https://github.com/deluxebear/colab-dfs-ext); `consent`, `mount`, `doctor` sağlar; ayrıca kurulmalıdır |
+| `colab-ext` eklentisi | Varsayılan Drive akışı için zorunlu | [colab-ext](https://github.com/deluxebear/colab-ext); Drive, çoklu hesap ve tanılama komutlarını sağlar; ayrıca kurulmalıdır |
 | Node.js, npm, Cloudflare `cf` CLI | Sabit alan adı veya FRP modu | Yerelden Cloudflare API ile DNS yönetir; Cloudflare named tunnel da bununla yapılandırılır. Quick Tunnel için gerekmez |
 | OpenSSH istemcisi `ssh` | FRP modu veya Colab SSH sorun giderme | FRP sunucusuna bağlanır; `~/.ssh/config` içindeki anahtar, port ve atlama ayarlarını kullanır |
 
@@ -376,31 +381,32 @@ colab sessions       # Colab erişimini doğrular; yeni VM oluşturmaz
 colab usage          # hesabın compute unit kullanımı/bakiyesi
 ```
 
-### 2. `colab dfs` eklentisinin kurulumu ve yetkilendirilmesi
+### 2. `colab-ext` eklentisinin kurulumu ve yetkilendirilmesi
 
-Bu proje başlatma sırasında varsayılan olarak `colab dfs mount` çağırır, notebook içindeki etkileşimli `drive.mount()`'a dayanmaz. Eklenti [deluxebear/colab-dfs-ext](https://github.com/deluxebear/colab-dfs-ext) deposundandır ve Colab CLI'dan sonra ayrıca kurulmalıdır:
+Bu proje başlatma sırasında varsayılan olarak `colab dfs mount` çağırır, notebook içindeki etkileşimli `drive.mount()`'a dayanmaz. Eklenti [deluxebear/colab-ext](https://github.com/deluxebear/colab-ext) deposundandır ve Colab CLI'dan sonra ayrıca kurulmalıdır:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/deluxebear/colab-dfs-ext/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/deluxebear/colab-ext/main/install.sh | sh
 ```
 
-Eklenti deposunu klonlayıp `python3 install.py` de çalıştırabilirsiniz. Kurucu kaynağı `~/.colab-dfs-ext/` altına kaydeder ve `colab` komutunu sağlayan Python ortamına otomatik bağlar; ayrıntılı seçenekler için [eklenti README'si](https://github.com/deluxebear/colab-dfs-ext/blob/main/README.md). Kurduktan sonra denetleyin ve tek seferlik Drive yetkilendirmesini yapın:
+Eklenti deposunu klonlayıp `python3 install.py` de çalıştırabilirsiniz. Kurucu kaynağı `~/.colab-ext/` altına kaydeder ve `colab` ortamına bağlar; ayrıntılar [eklenti README'sinde](https://github.com/deluxebear/colab-ext/blob/main/README.md). Kurduktan sonra denetleyin ve Drive yetkilendirmesini yapın:
 
 ```bash
 colab dfs --help
 colab dfs version
-colab dfs doctor
-colab dfs consent     # tarayıcıda bir kez yetki verin, sonraki bağlamalar etkileşim istemez
-colab dfs show        # yetki özetini gösterir, refresh token'ı yazdırmaz
+colab ext doctor
+colab drive consent   # tarayıcıda bir kez yetki verin
+colab drive show      # yetki özetini gösterir, refresh token'ı yazdırmaz
+colab account list
 ```
 
-Drive yetkilendirmesi ile Colab oturum kimlik doğrulaması ayrı yapılır. Eklentinin kimlik bilgileri `~/.config/colab-cli/dfs_credentials.json` dosyasındadır. Normal kullanımda servis betikleri uzaktaki `/content/drive`'ı otomatik bağlar, `mount`'u elle çağırmak gerekmez; boşta bir oturumla `colab dfs mount -s <oturum-adı>` ile doğrulayabilirsiniz.
+Drive yetkilendirmesi ile Colab oturum kimlik doğrulaması ayrı yapılır. Kimlik bilgileri tek hesaplı kurulumda `~/.config/colab-cli/dfs_credentials.json`, çoklu hesapta ilgili hesap dizinindedir. Servis betikleri `/content/drive`'ı otomatik bağlar; boşta bir oturumla `colab dfs mount -s <oturum-adı>` ile doğrulayabilirsiniz.
 
-Colab CLI'ı güncelledikten sonra eklentinin hâlâ yerinde olduğunu `colab dfs --help` ile kontrol edin; komut çalışıyorsa `colab dfs install` ile yeniden bağlayabilirsiniz. `No such command: dfs` görünür ve eklenti hâlâ `~/.colab-dfs-ext/` altındaysa kurucuyu yeniden çalıştırarak onarın:
+Colab CLI'ı güncelledikten sonra `colab ext doctor` ile eklentiyi kontrol edin. `No such command: dfs` görünür ve eklenti hâlâ `~/.colab-ext/` altındaysa kurucuyu yeniden çalıştırarak onarın:
 
 ```bash
-python3 "$HOME/.colab-dfs-ext/install.py"
-colab dfs --help
+python3 "$HOME/.colab-ext/install.py"
+colab ext doctor
 ```
 
 Eklenti dizini yoksa yukarıdaki kurulum komutunu yeniden çalıştırın. `up --no-drive` otomatik bağlamayı atlar, ancak Drive'daki ses örnekleri, görev kalıcılığı ve çıktı kaydetme gibi özellikler yine Drive'a bağlıdır; bu özellikler için bir alternatif değildir.
@@ -443,8 +449,9 @@ Proje kök dizininde, servisleri gerçekten çalıştıracağınız terminalde �
 python3 --version
 command -v colab
 colab version
-colab dfs --help
-colab dfs show
+colab ext doctor
+colab drive show
+colab account list
 colabllm tunnel-config
 # Sabit alan adı / FRP modu için ayrıca kontrol edin
 command -v cf
@@ -541,7 +548,7 @@ Tüm runtime betikleri (`nemotron-transcribe.py`, `comfyui.py`, `qwen-flash.py`,
 ```bash
 # Herhangi bir runtime'ın birden fazla eşzamanlı örneğini başlat (her birinin kendi Colab GPU VM'i, Cloudflare tüneli ve alan adı olur)
 colabllm comfyui up -i 1 --domain               # -> https://comfyui-1.example.com
-colabllm comfyui up -i 2 --domain               # -> https://comfyui-2.example.com
+colabllm comfyui up -i 2 -a gpu2 --domain       # -> https://comfyui-2.example.com (gpu2 hesabı ve bağlı Drive)
 colabllm qwen-flash up -i 2 --domain            # -> https://qwen-2.example.com
 colabllm ollama up -i 2 --domain                # -> https://ollama-2.example.com
 colabllm unsloth-studio up -i 2 --domain        # -> https://unsloth-studio-2.example.com

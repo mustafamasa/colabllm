@@ -17,7 +17,7 @@ python3 -m unittest tests/test_notebooks_sync.py
 | Shared transport | `templates/tunnel_client.py` | pasted as cell 4 |
 | Compiler cache archives | `templates/colab_cache.py` | written to `<work>/colab_cache.py` and imported |
 | ASGI security / Drive helpers | `templates/colab_asgi_common.py` | written next to each middleware |
-| Service middlewares / workers | `templates/nemotron_middleware.py`, `indextts_middleware.py`, `qwen3_tts_middleware.py`, `qwen3_tts_aux_worker.py` | written to the service work dir |
+| Service middlewares / workers | `templates/nemotron_middleware.py`, `indextts_middleware.py`, `qwen3_tts_middleware.py`, `qwen3_tts_aux_worker.py`, `drama3_middleware.py`, `tangoflux_service.py`, `flux_klein_middleware.py`, `qwen_image_middleware.py`, `minimax_h3_image_middleware.py` | written to the service work dir |
 | ComfyUI helper, custom node, browser JS | `templates/comfyui_workflow_helper.py`, `comfyui_workflow_downloader.py`, `comfyui_ssd_downloader.js` | written under `/content/ComfyUI` |
 | Code shared with the local CLI | `src/colabllm/lib/` (e.g. `nemotron_audio.py`, `avatar_sampling.py`, `ocr_parameters.py`) | embedded the same way |
 
@@ -103,11 +103,11 @@ for local, _ in CACHE_PAIRS:                            # keep-alive cell, after
         log(f"Cache archive save warning ({local.name}): {err}")
 ```
 
-Point `FLASHINFER_WORKSPACE_BASE`, `TRITON_CACHE_DIR`, `VLLM_CACHE_ROOT`, `TORCHINDUCTOR_CACHE_DIR` at the
-local SSD directories. Never point compiler caches directly at `/content/drive` and do not use
-`cp -rn` / `cp -ru` directory mirroring. Run a real warmup request before `save_cache` so lazily compiled
-kernels are included. Reference implementations: `NEMOTRON_TRANSCRIBE_*`, `INDEXTTS_*`, `QWEN3_TTS_*`,
-`LONGCAT_SETUP_TEMPLATE`, `templates/unlimited_ocr_setup.py`.
+Point `FLASHINFER_WORKSPACE_BASE`, `TRITON_CACHE_DIR`, `VLLM_CACHE_ROOT`, `TORCHINDUCTOR_CACHE_DIR`,
+`SGLANG_JIT_CACHE_DIR`, and `SGLANG_DG_CACHE_DIR` at the local SSD directories. Never point compiler caches
+directly at `/content/drive` and do not use `cp -rn` / `cp -ru` directory mirroring. Run a real warmup request
+before `save_cache` so lazily compiled kernels are included. Reference implementations: `NEMOTRON_TRANSCRIBE_*`,
+`INDEXTTS_*`, `QWEN3_TTS_*`, `MINIMAX_H3_IMAGE_*`, `LONGCAT_SETUP_TEMPLATE`, `templates/unlimited_ocr_setup.py`.
 
 ## Checklist when changing notebooks
 

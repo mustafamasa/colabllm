@@ -29,12 +29,12 @@ from processes import runner_alive
 PACKAGE = Path(__file__).resolve().parents[1]
 SERVICES_DIR = PACKAGE / 'services'
 ASSETS_DIR = PACKAGE / 'webui'
-DOCS_URL = 'https://github.com/deluxebear/colabllm/blob/master/docs/{}.md'
+DOCS_URL = 'https://github.com/mustafamasa/colabllm/blob/english/docs/{}.md'
 GPUS = ('T4', 'L4', 'G4', 'A100', 'H100', 'none')
 SECRET_KEYS = ('auth_user', 'auth_pass', 'api_token', 'login_user', 'login_pass')
 CATEGORIES = {
     'ollama': 'LLM', 'deepseek-coder': 'LLM', 'qwen-flash': 'LLM', 'deepseek-qwen-9b': 'LLM',
-    'comfyui': 'Image', 'flux-klein': 'Image', 'qwen-image': 'Image',
+    'comfyui': 'Image', 'flux-klein': 'Image', 'qwen-image': 'Image', 'minimax-h3-image': 'Image',
     'longcat-avatar': 'Video', 'longcat-video': 'Video', 'openjutsu': 'Video',
     'indextts': 'Audio', 'qwen3-tts': 'Audio', 'nemotron-transcribe': 'Audio',
     'drama3': 'Audio', 'tangoflux': 'Audio',

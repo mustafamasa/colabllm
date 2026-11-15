@@ -33,6 +33,21 @@ class CompletionTest(unittest.TestCase):
             self.assertEqual(candidates(['ollama', 'status', '-i', 'd']), ['demo'])
             self.assertEqual(candidates(['ollama', 'status', '--instance=d']), ['--instance=demo'])
 
+    def test_accounts_are_completed_without_reading_secret_files(self):
+        with tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {'COLAB_CLI_CONFIG_DIR': temp}):
+            for name in ('main', 'gpu1', 'gpu2'):
+                acct_dir = Path(temp)/'accounts'/name
+                acct_dir.mkdir(parents=True)
+                (acct_dir/'oauth_token.json').write_text('not-json-must-not-be-read')
+                (acct_dir/'dfs_credentials.json').write_text('not-json-must-not-be-read')
+            self.assertEqual(candidates(['--account', 'g']), ['gpu1', 'gpu2'])
+            self.assertEqual(candidates(['--account=g']), ['--account=gpu1', '--account=gpu2'])
+            self.assertEqual(candidates(['ollama', 'up', '-a', 'g']), ['gpu1', 'gpu2'])
+            self.assertEqual(candidates(['ollama', 'up', '--drive-account=m']), ['--drive-account=main'])
+            self.assertEqual(candidates(['doctor', '-a', 'g']), ['gpu1', 'gpu2'])
+            # Ensure minimax-h3-image's `-a` still completes aspect ratios, NOT accounts
+            self.assertEqual(candidates(['minimax-h3-image', 'generate', '-a', '16:']), ['16:9'])
+
     def run_shell(self, shell, body):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.util
 import io
@@ -109,6 +110,66 @@ class QwenFlashRuntimePlanningTest(unittest.TestCase):
             rt.parse_cpu_moe_spec("49")
         self.assertTrue(rt.looks_like_oom("ggml_backend_cuda_buffer_type_alloc_buffer: cuda_malloc failed: out of memory"))
         self.assertFalse(rt.looks_like_oom("main: server listening on 127.0.0.1:8000"))
+
+    def test_classify_health_response(self):
+        self.assertEqual(rt.classify_health_response(200, {"status": "ok"}), ("ready", "ok"))
+        self.assertEqual(
+            rt.classify_health_response(503, {"error": {"message": "Loading model"}}),
+            ("loading", "Loading model"),
+        )
+        self.assertEqual(
+            rt.classify_health_response(503, {"error": {"message": "Error loading model"}}),
+            ("error", "Error loading model"),
+        )
+        self.assertEqual(
+            rt.classify_health_response(503, {"error": {"message": "Failed to load model from GGUF"}}),
+            ("error", "Failed to load model from GGUF"),
+        )
+        self.assertEqual(rt.classify_health_response(503, {}), ("loading", "Loading model"))
+        self.assertEqual(rt.classify_health_response(401, {"error": "Invalid API Key"}), ("auth_error", "Invalid API Key"))
+
+    def test_evict_gguf_page_cache_logs_after_host_ram_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            shard = Path(tmp) / "shard.gguf"
+            shard.write_bytes(b"gguf")
+            logs: list[str] = []
+            calls: list[tuple[int, int, int, int]] = []
+            with (
+                patch.object(
+                    rt.os,
+                    "posix_fadvise",
+                    side_effect=lambda fd, off, length, adv: calls.append((fd, off, length, adv)),
+                    create=True,
+                ),
+                patch.object(rt.os, "POSIX_FADV_DONTNEED", 4, create=True),
+            ):
+                evicted = rt.evict_gguf_page_cache(Path(tmp), log=logs.append)
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(evicted, 4)
+            self.assertEqual(len(logs), 1)
+            self.assertIn("after host-RAM load", logs[0])
+            self.assertNotIn("before host-RAM load", logs[0])
+
+    def test_notebook_cells_parse_and_evict_page_cache_only_after_load(self):
+        nb = json.loads((ROOT / "src/colabllm/services/qwen-flash.ipynb").read_text(encoding="utf-8"))
+        service_src = ""
+        keepalive_src = ""
+        for idx, cell in enumerate(nb["cells"]):
+            if cell["cell_type"] != "code":
+                continue
+            src = "".join(cell["source"]) if isinstance(cell["source"], list) else cell["source"]
+            ast.parse(src, filename=f"qwen-flash.ipynb#cell-{idx}")
+            first_line = src.splitlines()[0] if src else ""
+            if first_line.startswith("# @title 2. Service"):
+                service_src = src
+            elif first_line.startswith("# @title 5. Ready + keep-alive"):
+                keepalive_src = src
+
+        self.assertTrue(service_src, "missing Service cell in qwen-flash.ipynb")
+        self.assertTrue(keepalive_src, "missing Ready + keep-alive cell in qwen-flash.ipynb")
+        self.assertNotIn("evict_gguf_page_cache", service_src)
+        self.assertIn("classify_health_response", keepalive_src)
+        self.assertIn("evict_gguf_page_cache", keepalive_src)
 
 
 class QwenFlashServerArgsAndStagingTest(unittest.TestCase):

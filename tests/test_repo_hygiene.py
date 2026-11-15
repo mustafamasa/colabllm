@@ -94,8 +94,19 @@ class RepoHygieneTest(unittest.TestCase):
         tangoflux.prepare_up(types.SimpleNamespace())
         self.assertEqual(tangoflux.SERVICE.env, tf_baseline)
 
+        h3_image = load_service("minimax-h3-image")
+        h3_baseline = dict(h3_image.SERVICE.env)
+        h3_image.prepare_up(types.SimpleNamespace(up_CT_H3_IMAGE_QUANTIZATION="bf16", up_no_warmup=True))
+        self.assertEqual(h3_image.SERVICE.env["CT_H3_IMAGE_QUANTIZATION"], "bf16")
+        self.assertEqual(h3_image.SERVICE.env["CT_H3_IMAGE_WARMUP"], "off")
+        h3_image.prepare_up(types.SimpleNamespace())
+        self.assertEqual(h3_image.SERVICE.env, h3_baseline)
+
     def test_service_default_hostnames_are_short_aliases(self):
-        for name in ("qwen-flash", "deepseek-coder", "nemotron-transcribe", "indextts", "qwen3-tts", "drama3", "tangoflux"):
+        for name in (
+            "qwen-flash", "deepseek-coder", "nemotron-transcribe",
+            "indextts", "qwen3-tts", "drama3", "tangoflux", "minimax-h3-image",
+        ):
             alias = load_service(name).SERVICE.default_hostname
             self.assertTrue(alias and "." not in alias, (name, alias))
 
