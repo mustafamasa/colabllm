@@ -16,6 +16,7 @@ src/colabllm/cli.py     packaged CLI: service dispatch and project configuration
 src/colabllm/services/<name>.py       execution script (local): session, Drive, selected tunnel, credentials, keep-alive
 src/colabllm/services/<name>.ipynb    notebook (Colab VM): setup, service, Caddy auth, cloudflared/frpc, keep-alive loop
 src/colabllm/lib/colabsvc.py          shared runner used by every script (Service dataclass + CLI)
+src/colabllm/lib/colab_accounts.py    read-only colab-ext multi-account & shared-Drive resolver (no secrets read)
 src/colabllm/control.py             project-global domain and FRP configuration
 src/colabllm/lib/frp_backend.py      local SSH/DNS orchestration; frp_server.py provisions/adopts the server
 templates/build_notebooks.py  generator of every .ipynb (never hand-edit generated notebooks)
@@ -47,7 +48,8 @@ Also available: `unlimited-ocr` (A100, Caddy auth, persistent Drive OCR jobs),
 `longcat-video` (G4, Caddy auth, Gradio text/image-to-video and continuation UI),
 and `openjutsu` (G4, Caddy auth, co-located ComfyUI + patched `comfy-api-proxy` + Openjutsu Next.js 16 studio for MiniMax H3 motion transfer, object edit, face/colour post-processing & FLUX.3 picture prep; auto `--highvram` on `>=76 GiB` GPUs via `--vram-mode`, local NVMe SSD `h3_chains` bind-mount via `--chains-storage`, and full `swap`/`object`/`mask`/`face`/`color`/`job`/`download`/`cancel`/`check` CLI),
 `flux-klein` (G4 default, H100/L4 compatible, Bearer API key auth, `black-forest-labs/flux-3-image-klein` BF16/FP8R/NVFP4 via `vllm serve --omni` + optional `flux-3-image-klein-pup` Qwen3.5-9B prompt upsampler, OpenAI-compatible `/v1/images/generations` + `/v1/chat/completions` + `/v1/images/edits` + `/api/ct/edit`, and Drive-native `generate`/`edit`/`upsample`/`ls-drive`/`models` CLI),
-and `qwen-image` (G4 default, H100/A100 compatible, Bearer API key auth + CORS preflight, `Qwen/Qwen-Image-2.1` 7.1B DiT + Qwen3-VL-8B + 4-channel RGBA VAE via `vllm serve --omni`, 40-step / `true_cfg_scale=1.0` defaults, 1–4 `<image1>..<image4>` reference images, multipart+JSON `/v1/images/edits` + `/api/ct/edit` + `/v1/images/generations` + `/v1/chat/completions`, and Drive-native `generate`/`edit`/`ls-drive`/`models` CLI).
+and `qwen-image` (G4 default, H100/A100 compatible, Bearer API key auth + CORS preflight, `Qwen/Qwen-Image-2.1` 7.1B DiT + Qwen3-VL-8B + 4-channel RGBA VAE via `vllm serve --omni`, 40-step / `true_cfg_scale=1.0` defaults, 1–4 `<image1>..<image4>` reference images, multipart+JSON `/v1/images/edits` + `/api/ct/edit` + `/v1/images/generations` + `/v1/chat/completions`, and Drive-native `generate`/`edit`/`ls-drive`/`models` CLI),
+and `minimax-h3-image` (G4 default, H100/A100 compatible, Bearer API key auth + async `/api/ct/jobs` + content-addressed binary `/api/ct/uploads` + resumable `Range` `/api/ct/jobs/{id}/content`, `MiniMaxAI/MiniMax-H3-Image` 33.1B DiT + 33.4B Qwen3-VL + MiniMaxH3ImageVAE 6-step fused PDD via SGLang Diffusion with default `fp8-all` resident ~50.4 GiB VRAM or `bf16` lossless ~92.2 GiB VRAM, 1–16 `<Picture 1>..<Picture 16>` reference images, OpenAI `/v1/images/*` compatibility, and network-friendly `generate`/`edit`/`job`/`download`/`ls-drive`/`models` CLI).
 For each runtime's current concrete usage, read `docs/<name>.md`; portable copies are bundled in
 `skills/colabllm/references/<name>.md`.
 
@@ -84,10 +86,24 @@ there is no migration. New service pairs are discovered automatically and must b
 Runtime command registration belongs in the shared parser (`main(..., configure=..., handlers=...)`),
 and script entry points use `cli_support.run_cli` for consistent errors. Local authenticated HTTP
 clients use `safe_urlopen` or `SameOriginRedirect`. Keep diagnostics on stderr and JSON on stdout.
-Instance IDs are validated strictly; parsing stops at `--`. State updates are locked transactions;
+Instance IDs are validated strictly; parsing stops at `--`. Do not register `-a` on the root
+service parser or strip `-a` before subcommand dispatch (`minimax-h3-image` uses `-a` for `--aspect`);
+use `--account` globally/per-service and keep `-a/--account` only on `up` and `doctor`.
+`colab_accounts` mirrors `colab-ext` (`~/.config/colab-cli/accounts.json` and `accounts/<name>/`)
+and propagates `COLAB_ACCOUNT` / `COLAB_DRIVE_ACCOUNT` to `colab` subprocesses while pinning `account`
+and `drive_account` in `state.json` for `--auto-restart`, `status`, `down`, and `nemotron-transcribe`
+helper calls (falling back cleanly to legacy `sessions.json`/`dfs_credentials.json` when unconfigured).
+State updates are locked transactions;
 startup/shutdown also use a per-instance operation lock. Both foreground and detached runners record
 PID plus start identity, and shutdown verifies ownership before signalling. `down` preserves state
 on remote stop failure; readiness timeout is nonzero, while `up --detach` explicitly skips waiting.
+`up --auto-restart` (`--idle-check`, `--restart-delay`, `--max-restarts`) runs an ownership-checked
+supervisor loop in `exec_runner`: it parses `colab status` text (which exits 0 even on
+`Session ... not found`), reuses live VMs on transient network drops (preserving `ready=True` and
+skipping `ready_timeout` when the authenticated endpoint is already serving HTTP 200), recreates
+reclaimed VMs with saved `session_gpu`/`mount_drive` (default `3s` restart delay), and breaks
+half-open silent sockets within `~10s` via a two-stage edge HTTP probe + `colab status` confirmation
+(plus a 300s `--idle-check` backstop) while capping pre-`CT_READY` startup retries with backoff.
 `info/ps/status --json` default to redacted output; credentials require `--show-secrets`.
 
 Readiness is parsed incrementally as complete protocol lines; preserve the exact `CT_READY` line
@@ -130,7 +146,7 @@ Configuration changes affect future starts; preserve running generation tasks wh
 
 `up` normally returns once the notebook prints `CT_READY`; `--detach` returns before readiness.
 A detached local runner keeps `colab exec`
-attached (= keep-alive). Requirements: `colab` CLI logged in, `colab dfs consent` done once.
+attached (= keep-alive). Requirements: `colab` CLI logged in (`colab account list`), `colab drive consent` (legacy alias `colab dfs consent`) done once on the compute or shared Drive account (`colab ext doctor`).
 Fixed domains use the local `cf` login for DNS in either backend. FRP server management also needs SSH.
 
 ## Hard-won rules (verified on real runs -- do not "simplify" them away)

@@ -15,6 +15,52 @@ The version number comes only from `pyproject.toml` and follows `MAJOR.MINOR.PAT
 
 - `openjutsu` now installs the original English [`D3voz/openjutsu`](https://github.com/D3voz/openjutsu) web app instead of the Chinese-localized `deluxebear/colab_openjutsu`; existing checkouts switch origin automatically on the next `up`.
 
+## [0.1.10] - 2026-11-14
+
+### Added
+
+- Integrate `colab-ext` multi-account and shared Drive bindings. Select an account by name or email with `--account`, `COLABLLM_ACCOUNT` or `COLAB_ACCOUNT`; `up` and `doctor` also accept `-a` and `--drive-account`. Runtime-specific `-a` options retain their own meanings. Instance state records the selected accounts so restart, status, shutdown and Nemotron Drive operations continue using the original account. Legacy single-account installations remain supported. `info`, `ps`, `list`, `doctor` and offline shell completion expose or resolve account information without reading credentials or keyrings.
+
+### Fixed
+
+- `qwen-flash` preserves the warmed GGUF page cache before startup and classifies HTTP 503 loading and asynchronous failure responses, enabling prompt OOM offload escalation or error reporting.
+
+### Documentation
+
+- Update extension setup to `colab-ext` and document account rotation and shared model caches.
+
+## [0.1.9] - 2026-11-13
+
+### Changed
+
+- `--auto-restart` checks the public edge every 10 seconds, confirms gateway or connection failures with `colab status`, and immediately recreates a reclaimed VM. The default reconnect delay is now 3 seconds; a live VM receives a 60-second cooldown. `up` can adopt an already healthy remote session and retain its ready state and URL.
+
+## [0.1.8] - 2026-11-13
+
+### Changed
+
+- Reduce the default silent-connection check to 300 seconds (`--idle-check` overrides it), recheck every 60 seconds when the VM is still present, and keep long-running heartbeats at most four minutes apart.
+
+### Fixed
+
+- Restore readiness immediately when reconnecting to a live VM whose authenticated service probe succeeds, without repeatedly timing out while the previous keep-alive cell is blocked.
+
+## [0.1.7] - 2026-11-12
+
+### Added
+
+- Add `up --auto-restart` to all runtimes, with `--restart-delay` and `--max-restarts`. The supervisor distinguishes local disconnects from reclaimed VMs, reuses live sessions and SSD caches, or recreates the VM with the original GPU and Drive mount. Startup failures use backoff and retry limits; manual `down` stops the supervisor.
+
+## [0.1.6] - 2026-11-12
+
+### Added
+
+- Add the `minimax-h3-image` SGLang Diffusion runtime (G4 by default; H100/A100 supported) with Bearer authentication, six-step PDD generation, native 4K and 1-16 image editing. Default `fp8-all` peaks at about 50.4 GiB; `--quantization bf16` supports original precision. The internal async protocol supports deduplicated binary uploads, resumable downloads, server-side WebP/JPEG and direct Drive I/O alongside OpenAI-compatible image endpoints.
+
+### Documentation
+
+- Add the MiniMax image runtime guide and update the packaged skills.
+
 ## [0.1.5] - 2026-11-09
 
 ### Added

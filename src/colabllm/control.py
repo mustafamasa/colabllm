@@ -14,6 +14,7 @@ from colabsvc import cmd_tunnel_config, validate_domain
 def build_parser():
     parser = argparse.ArgumentParser(description='Global configuration shared by all runtimes of this project', allow_abbrev=False)
     parser.add_argument('--command-timeout', type=positive_seconds, help='timeout for external commands, in seconds')
+    parser.add_argument('--account', help='Colab account name or email (global option compatibility)')
     parser.add_argument('--debug', action='store_true', help='print exception tracebacks')
     parser.add_argument('--quiet', action='store_true', help='suppress diagnostic output')
     parser.add_argument('--no-color', action='store_true', help='disable colored diagnostic output')

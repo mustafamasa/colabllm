@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent/'lib'))
 from cli_support import CliError, positive_seconds, run_cli
+from colab_accounts import validate_account
 from doctor import diagnose
 
 
@@ -19,12 +20,17 @@ def _port(value):
 def build_parser():
     parser = argparse.ArgumentParser(prog='colabllm', allow_abbrev=False)
     parser.add_argument('--command-timeout', type=positive_seconds, help='timeout for external commands, in seconds')
+    parser.add_argument('--account', metavar='ACCOUNT', type=validate_account, help='Colab account name or email')
     parser.add_argument('--debug', action='store_true', help='print exception tracebacks')
     parser.add_argument('--quiet', action='store_true', help='suppress diagnostic output')
     parser.add_argument('--no-color', action='store_true', help='disable colored diagnostic output')
     commands = parser.add_subparsers(dest='command', required=True)
     doctor = commands.add_parser('doctor', help='check local dependencies, configuration and authorization')
     doctor.add_argument('--json', action='store_true', help='print the check results as JSON')
+    doctor.add_argument('-a', '--account', default=argparse.SUPPRESS, metavar='ACCOUNT', type=validate_account,
+                        help='check the specified Colab account name or email')
+    doctor.add_argument('--drive-account', metavar='ACCOUNT', type=validate_account,
+                        help='check the specified shared Google Drive credentials account')
     doctor.add_argument('--transport', choices=('quick', 'cloudflare', 'frp'), help='check the given tunnel backend; read from the configuration by default')
     doctor.add_argument('--no-drive', action='store_true', help='skip the Drive extension checks')
     doctor.add_argument('--online', action='store_true', help='also run time-limited read-only authorization checks; never opens a browser or creates a session')
@@ -45,7 +51,14 @@ def build_parser():
 def main():
     args = build_parser().parse_args()
     if args.command == 'doctor':
-        result = diagnose(transport=args.transport, no_drive=args.no_drive, online=args.online, timeout=args.timeout)
+        result = diagnose(
+            transport=args.transport,
+            no_drive=args.no_drive,
+            online=args.online,
+            timeout=args.timeout,
+            account=getattr(args, 'account', None),
+            drive_account=args.drive_account,
+        )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:

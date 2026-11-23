@@ -287,7 +287,7 @@ TUNNEL = ("# @title 4. Tunnel -- Cloudflare by default, or project-configured FR
 
 KEEPALIVE = r'''# @title 5. Ready + keep-alive -- KEEP THIS CELL RUNNING
 # The Colab session only lives while the `colab exec` connection is open and this cell blocks.
-# The watchdog restarts any process from PROCS that died; a heartbeat line is printed every 10 min.
+# The watchdog restarts any process from PROCS that died; a heartbeat line is printed every 4 min.
 ct_wait_http(f"http://127.0.0.1:{SERVICE_PORT}%(health_path)s", timeout=%(ready_timeout)d)
 if AUTH == "caddy" and not CREDS_FROM_ENV:   # started from the Colab UI: show generated credentials
     print(f"CT_CREDENTIALS user={AUTH_USER} pass={AUTH_PASS}")
@@ -304,7 +304,7 @@ while True:
             print(f"[watchdog] {name} exited with {proc.returncode}; restarting\n{ct_tail(name, 15)}", flush=True)
             ct_stop_proc(proc)
             PROCS[name] = (restart(), restart)
-    if time.time() - last_beat > 600:
+    if time.time() - last_beat > 240:
         last_beat = time.time()
         print(f"[heartbeat] {time.strftime('%%H:%%M:%%S')} " +
               " ".join(f"{n}={'up' if p.poll() is None else 'down'}" for n, (p, _) in PROCS.items()), flush=True)
@@ -636,7 +636,7 @@ def _ollama_health():
         return resp.status == 200
 
 def _ollama_heartbeat(uptime_s):
-    if uptime_s % 600 < 60:
+    if uptime_s % 240 < 60:
         states = " ".join(f"{n}={'up' if p.poll() is None else 'down'}" for n, (p, _) in PROCS.items())
         olog(f"[heartbeat] uptime={uptime_s}s {states} gpu={ct_gpu_stat()}")
 
@@ -687,6 +687,7 @@ def _watch_inner():
         break
     print(f"{SERVICE} is up: {PUBLIC_URL}")
     print("CT_READY", flush=True)
+    last_beat = time.time()
     while True:
         time.sleep(30)
         for name, (proc, restart) in list(PROCS.items()):
@@ -694,6 +695,10 @@ def _watch_inner():
                 print(f"[watchdog] {name} exited; restarting", flush=True)
                 ct_stop_proc(proc)
                 PROCS[name] = (restart(), restart)
+        if time.time() - last_beat > 240:
+            last_beat = time.time()
+            states = " ".join(f"{n}={'up' if p.poll() is None else 'down'}" for n, (p, _) in PROCS.items())
+            print(f"[heartbeat] {time.strftime('%H:%M:%S')} {states} gpu={ct_gpu_stat()}", flush=True)
 
 threading.Thread(target=_watch, daemon=True).start()
 from colab import start
@@ -726,6 +731,7 @@ from qwen_flash_runtime import (
     DEFAULT_REPO,
     MODEL_NUM_LAYERS,
     build_server_args,
+    classify_health_response,
     compute_yarn_params,
     detect_gpu_info,
     detect_host_ram_mib,
@@ -844,8 +850,6 @@ SPAWN_LOG_OFFSET = 0
 def start_service():
     global SPAWN_LOG_OFFSET
     subprocess.run(["pkill", "-f", str(BIN_DIR / "llama-server")], check=False, timeout=15)
-    if HW_PLAN.get("ple_in_ram"):
-        evict_gguf_page_cache(QWEN_WORK / "model", log=qlog)
     args = build_server_args(
         server_bin=BIN_DIR / "llama-server",
         model_path=MODEL_PATH,
@@ -887,7 +891,13 @@ def http_json(url, key=None, payload=None, timeout=15):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
-        return err.code, {}
+        try:
+            raw = err.read().decode("utf-8", errors="replace")
+            parsed = json.loads(raw) if raw else {}
+            body = parsed if isinstance(parsed, dict) else {}
+        except (OSError, ValueError):
+            body = {}
+        return err.code, body
 
 def auth_check(base, key):
     for candidate, expected in ((None, 401), ("invalid-deployment-test-key", 401), (key, 200)):
@@ -901,50 +911,68 @@ ctx_fallback = [819_200, 524_288]
 ctx_idx = 0
 deadline = time.monotonic() + 2400
 last_notice = 0.0
+last_health_detail = "starting"
+
+def try_recover_from_load_failure(reason_label):
+    global moe_stepups, ctx_idx
+    recent_log = ct_log_since("llama-server", SPAWN_LOG_OFFSET)
+    if (
+        CFG["cpu_moe"].strip().lower() == "auto"
+        and moe_stepups < 3
+        and HW_PLAN["n_cpu_moe"] + 2 <= MODEL_NUM_LAYERS
+        and looks_like_oom(recent_log)
+    ):
+        moe_stepups += 1
+        prev_moe = HW_PLAN["n_cpu_moe"]
+        HW_PLAN["n_cpu_moe"] = min(MODEL_NUM_LAYERS, prev_moe + 2)
+        HW_PLAN["mode"] = f"hybrid-cpu-moe-{HW_PLAN['n_cpu_moe']}"
+        qlog(
+            f"Startup CUDA OOM at n_cpu_moe={prev_moe}; offloading +2 expert layers "
+            f"(-> n_cpu_moe={HW_PLAN['n_cpu_moe']}) while keeping ctx={HW_PLAN['context']}"
+        )
+        PROCS["service"] = (start_service(), start_service)
+        return True
+    if HW_PLAN.get("context_auto") and ctx_idx < len(ctx_fallback) and looks_like_oom(recent_log):
+        prev_ctx = HW_PLAN["context"]
+        next_ctx = ctx_fallback[ctx_idx]
+        ctx_idx += 1
+        if next_ctx < prev_ctx:
+            rs, rscale, yorig = compute_yarn_params(next_ctx)
+            HW_PLAN["context"] = next_ctx
+            HW_PLAN["rope_scaling"] = rs
+            HW_PLAN["rope_scale"] = rscale
+            HW_PLAN["yarn_orig_ctx"] = yorig
+            qlog(f"Startup OOM at ctx={prev_ctx}; stepping down to ctx={next_ctx} and retrying")
+            PROCS["service"] = (start_service(), start_service)
+            return True
+    raise RuntimeError(f"{reason_label}:\n" + ct_tail("llama-server", 60))
 
 while time.monotonic() < deadline:
     proc = PROCS["service"][0]
     if proc.poll() is not None:
-        recent_log = ct_log_since("llama-server", SPAWN_LOG_OFFSET)
-        if (
-            CFG["cpu_moe"].strip().lower() == "auto"
-            and moe_stepups < 3
-            and HW_PLAN["n_cpu_moe"] + 2 <= MODEL_NUM_LAYERS
-            and looks_like_oom(recent_log)
-        ):
-            moe_stepups += 1
-            prev_moe = HW_PLAN["n_cpu_moe"]
-            HW_PLAN["n_cpu_moe"] = min(MODEL_NUM_LAYERS, prev_moe + 2)
-            HW_PLAN["mode"] = f"hybrid-cpu-moe-{HW_PLAN['n_cpu_moe']}"
-            qlog(
-                f"Startup CUDA OOM at n_cpu_moe={prev_moe}; offloading +2 expert layers "
-                f"(-> n_cpu_moe={HW_PLAN['n_cpu_moe']}) while keeping ctx={HW_PLAN['context']}"
-            )
-            PROCS["service"] = (start_service(), start_service)
-            continue
-        if HW_PLAN.get("context_auto") and ctx_idx < len(ctx_fallback) and looks_like_oom(recent_log):
-            prev_ctx = HW_PLAN["context"]
-            next_ctx = ctx_fallback[ctx_idx]
-            ctx_idx += 1
-            if next_ctx < prev_ctx:
-                rs, rscale, yorig = compute_yarn_params(next_ctx)
-                HW_PLAN["context"] = next_ctx
-                HW_PLAN["rope_scaling"] = rs
-                HW_PLAN["rope_scale"] = rscale
-                HW_PLAN["yarn_orig_ctx"] = yorig
-                qlog(f"Startup OOM at ctx={prev_ctx}; stepping down to ctx={next_ctx} and retrying")
-                PROCS["service"] = (start_service(), start_service)
-                continue
-        raise RuntimeError("llama-server exited during load:\n" + ct_tail("llama-server", 60))
+        if try_recover_from_load_failure("llama-server exited during load"):
+            last_health_detail = "restarting"
+        continue
     try:
-        if http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200:
+        h_code, h_body = http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)
+        h_state, h_detail = classify_health_response(h_code, h_body)
+        last_health_detail = h_detail
+        if h_state == "ready":
             break
+        if h_state == "error":
+            ct_stop_proc(proc)
+            if try_recover_from_load_failure(f"llama-server reported model load error ({h_detail})"):
+                last_health_detail = "restarting"
+            continue
+        if h_state == "auth_error":
+            ct_stop_proc(proc)
+            raise RuntimeError(f"Local /health rejected API token ({h_detail})")
     except (OSError, ValueError):
         pass
     if time.monotonic() - last_notice > 45:
         qlog(
-            f"Waiting for model load / warmup (ctx={HW_PLAN['context']}, mode={HW_PLAN['mode']}) | "
-            f"GPU: {ct_gpu_stat('memory.used,memory.total,utilization.gpu')}"
+            f"Waiting for model load / warmup (ctx={HW_PLAN['context']}, mode={HW_PLAN['mode']}, "
+            f"status={last_health_detail}) | GPU: {ct_gpu_stat('memory.used,memory.total,utilization.gpu')}"
         )
         last_notice = time.monotonic()
     time.sleep(5)
@@ -3331,7 +3359,7 @@ def _oj_health():
         return resp.status == 200
 
 def _oj_heartbeat(uptime_s):
-    if uptime_s % 600 < 60:
+    if uptime_s % 240 < 60:
         states = " ".join(f"{n}={'up' if p.poll() is None else 'down'}" for n, (p, _) in PROCS.items())
         olog(f"[heartbeat] uptime={uptime_s}s {states} gpu={ct_gpu_stat()}")
 
@@ -5412,7 +5440,526 @@ ct_watchdog(
 )
 '''
 
+MINIMAX_H3_IMAGE_CFG = dict(name="minimax-h3-image", service_port=8092, auth="builtin", public_port=8092)
+
+MINIMAX_H3_IMAGE_SETUP = r'''# @title 1. Setup -- SGLang Diffusion (`MiniMax-H3-Image`), local NVMe weights & compiler caches
+import hashlib
+import shutil
+from pathlib import Path
+
+def h3log(msg):
+    print(f"[minimax-h3-image {time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+MODEL_REPO = (os.environ.get("CT_H3_IMAGE_MODEL") or "MiniMaxAI/MiniMax-H3-Image").strip()
+MODEL_ALIAS = (os.environ.get("CT_H3_IMAGE_ALIAS") or "minimax-h3-image").strip()
+QUANTIZATION = (os.environ.get("CT_H3_IMAGE_QUANTIZATION") or "fp8-all").strip().lower()
+PLACEMENT = (os.environ.get("CT_H3_IMAGE_PLACEMENT") or "auto").strip().lower()
+WARMUP_MODE = (os.environ.get("CT_H3_IMAGE_WARMUP") or "server").strip().lower()
+SGLANG_PORT = int(os.environ.get("CT_H3_SGLANG_PORT") or "30000")
+SGLANG_BASE_WHEEL = "0.5.23"
+SGLANG_MAIN_COMMIT = "b174f4bb4fe0f316cf625aa5441f0ea5bd65cd84"
+
+H3_WORK = Path("/content/minimax-h3-image")
+VENV_DIR = H3_WORK / "venv"
+SGLANG_SRC_DIR = H3_WORK / "sglang-src"
+MODEL_DIR = H3_WORK / "MiniMax-H3-Image"
+SGLANG_OUTPUT_DIR = H3_WORK / "sglang-outputs"
+SGLANG_INPUT_DIR = H3_WORK / "sglang-inputs"
+UPLOADS_DIR = H3_WORK / "uploads"
+JOBS_DIR = H3_WORK / "jobs"
+CACHE_LOCAL_ROOT = H3_WORK / "compiler-caches"
+FLASHINFER_CACHE_DIR = CACHE_LOCAL_ROOT / "flashinfer-cache"
+TRITON_CACHE_DIR = CACHE_LOCAL_ROOT / "triton-cache"
+INDUCTOR_CACHE_DIR = CACHE_LOCAL_ROOT / "inductor-cache"
+SGLANG_JIT_CACHE_DIR = CACHE_LOCAL_ROOT / "sglang-jit-cache"
+
+for _d in (
+    H3_WORK, SGLANG_OUTPUT_DIR, SGLANG_INPUT_DIR, UPLOADS_DIR, JOBS_DIR,
+    FLASHINFER_CACHE_DIR, TRITON_CACHE_DIR, INDUCTOR_CACHE_DIR, SGLANG_JIT_CACHE_DIR,
+    Path(DATA_DIR) / "inputs", Path(DATA_DIR) / "outputs",
+):
+    _d.mkdir(parents=True, exist_ok=True)
+
+gpu_info = ct_gpu_stat("name,memory.total,compute_cap")
+if gpu_info == "cpu/no-gpu":
+    raise RuntimeError("MiniMax-H3-Image requires a CUDA GPU (Colab G4 96 GB recommended).")
+_gpu_parts = [p.strip() for p in gpu_info.splitlines()[0].split(",")]
+GPU_NAME = _gpu_parts[0]
+GPU_VRAM_MIB = int(re.sub(r"[^0-9]", "", _gpu_parts[1]) or "0") if len(_gpu_parts) > 1 else 0
+GPU_CC = _gpu_parts[2] if len(_gpu_parts) > 2 else "unknown"
+FREE_SSD_GB = shutil.disk_usage("/content").free / (1024**3)
+h3log(f"GPU: {GPU_NAME} ({GPU_VRAM_MIB} MiB, sm={GPU_CC}) | /content free SSD: {FREE_SSD_GB:.1f} GiB")
+h3log(f"Target config: model={MODEL_REPO} quant={QUANTIZATION} placement={PLACEMENT} warmup={WARMUP_MODE}")
+
+(H3_WORK / "colab_cache.py").write_text(__H3_CACHE_SOURCE__, encoding="utf-8")
+sys.path.insert(0, str(H3_WORK))
+from colab_cache import restore_cache, save_cache  # noqa: E402
+
+CACHE_ARCHIVES = Path(DATA_DIR) / "cache-archives"
+CACHE_KEY = re.sub(r"[^a-zA-Z0-9._-]+", "-", f"sglang-{SGLANG_MAIN_COMMIT[:10]}-{GPU_NAME}-{GPU_CC}").strip("-").lower()
+CACHE_PAIRS = [
+    (FLASHINFER_CACHE_DIR, Path(DATA_DIR) / "flashinfer-cache"),
+    (TRITON_CACHE_DIR, Path(DATA_DIR) / "triton-cache"),
+    (INDUCTOR_CACHE_DIR, Path(DATA_DIR) / "inductor-cache"),
+    (SGLANG_JIT_CACHE_DIR, Path(DATA_DIR) / "sglang-jit-cache"),
+]
+for _loc_c, _leg_c in CACHE_PAIRS:
+    restore_cache(_loc_c, _leg_c, CACHE_ARCHIVES, CACHE_KEY, h3log)
+
+def run_logged(cmd, log_path, *, env=None, cwd=None):
+    started = time.monotonic()
+    with open(log_path, "a", encoding="utf-8") as lf:
+        lf.write(f"\n$ {' '.join(map(str, cmd))}\n")
+        lf.flush()
+        proc = subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT, env=env, cwd=cwd)
+        last_beat = started
+        while proc.poll() is None:
+            time.sleep(2)
+            if time.monotonic() - last_beat >= 20:
+                h3log(f"Running {Path(cmd[0]).name} ({int(time.monotonic() - started)}s elapsed)...")
+                last_beat = time.monotonic()
+        if proc.returncode != 0:
+            tail = "".join(open(log_path, errors="replace").readlines()[-45:])
+            raise RuntimeError(f"Command failed (exit {proc.returncode}): {' '.join(map(str, cmd))}\n{tail}")
+
+def prepare_env():
+    py_bin = VENV_DIR / "bin" / "python"
+    marker = VENV_DIR / ".h3_env_ready"
+    stamp_val = f"{SGLANG_BASE_WHEEL}:{SGLANG_MAIN_COMMIT}:v2"
+    if py_bin.is_file() and marker.is_file() and marker.read_text(encoding="utf-8").strip() == stamp_val:
+        chk = subprocess.run(
+            [str(py_bin), "-c",
+             "from sglang.multimodal_gen.configs.pipeline_configs.minimax_h3_image import MiniMaxH3ImagePipelineConfig; "
+             "import blake3, uvicorn, torch; assert torch.cuda.is_available()"],
+            check=False, capture_output=True, text=True,
+        )
+        if chk.returncode == 0:
+            h3log("Reusing prepared SGLang Diffusion virtualenv on local SSD")
+            return py_bin
+
+    env_log = f"{WORK}/h3_setup.log"
+    if not shutil.which("uv"):
+        run_logged([sys.executable, "-m", "pip", "install", "-q", "uv"], env_log)
+    uv_bin = shutil.which("uv") or "uv"
+
+    h3log(f"Creating clean Python 3.12 venv at {VENV_DIR} (log: {env_log})...")
+    run_logged([uv_bin, "venv", "--python", "3.12", str(VENV_DIR), "--clear"], env_log)
+
+    h3log(f"Installing prebuilt SGLang {SGLANG_BASE_WHEEL} + CUDA 13 + FlashAttention-4 base wheels...")
+    run_logged(
+        [
+            uv_bin, "pip", "install",
+            "--python", str(py_bin),
+            "--prerelease=allow",
+            f"sglang[diffusion]=={SGLANG_BASE_WHEEL}",
+            "flash-attn-4>=4.0.0b18",
+            "blake3>=1.0.0",
+            "huggingface_hub>=0.27.0",
+            "uvicorn>=0.30.0",
+            "setuptools>=68.0",
+            "setuptools-scm>=8.0",
+            "wheel",
+        ],
+        env_log,
+    )
+
+    h3log(f"Fetching SGLang commit {SGLANG_MAIN_COMMIT[:10]} (MiniMax-H3-Image native pipeline)...")
+    if not (SGLANG_SRC_DIR / ".git").is_dir():
+        shutil.rmtree(SGLANG_SRC_DIR, ignore_errors=True)
+        SGLANG_SRC_DIR.mkdir(parents=True, exist_ok=True)
+        run_logged(["git", "-C", str(SGLANG_SRC_DIR), "init"], env_log)
+        run_logged(["git", "-C", str(SGLANG_SRC_DIR), "remote", "add", "origin", "https://github.com/sgl-project/sglang.git"], env_log)
+    run_logged(["git", "-C", str(SGLANG_SRC_DIR), "fetch", "--depth", "1", "origin", SGLANG_MAIN_COMMIT], env_log)
+    run_logged(["git", "-C", str(SGLANG_SRC_DIR), "checkout", "-f", "FETCH_HEAD"], env_log)
+
+    # Preserve prebuilt Rust .so extensions from the PyPI binary wheel before overlaying pure-Python main!
+    wheel_pkg = Path(
+        subprocess.check_output(
+            [str(py_bin), "-c", "import pathlib, sglang; print(pathlib.Path(sglang.__file__).resolve().parent)"],
+            text=True,
+        ).strip()
+    )
+    src_pkg = SGLANG_SRC_DIR / "python" / "sglang"
+    copied_so = 0
+    if wheel_pkg.is_dir() and wheel_pkg != src_pkg.resolve():
+        for so_file in wheel_pkg.rglob("*.so"):
+            rel = so_file.relative_to(wheel_pkg)
+            dst = src_pkg / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(so_file, dst)
+            copied_so += 1
+    h3log(f"Preserved {copied_so} prebuilt native extension(s) into {src_pkg}")
+
+    overlay_env = dict(os.environ)
+    overlay_env["SGLANG_BUILD_RUST_EXTS"] = "none"
+    overlay_env["SETUPTOOLS_SCM_PRETEND_VERSION"] = "0.5.24.dev0"
+    run_logged(
+        [
+            uv_bin, "pip", "install",
+            "--python", str(py_bin),
+            "--no-build-isolation",
+            "--no-deps",
+            "-e", str(SGLANG_SRC_DIR / "python"),
+        ],
+        env_log,
+        env=overlay_env,
+    )
+
+    h3log("Aligning CUDA 13 kernel packages with SGLang main...")
+    run_logged(
+        [
+            uv_bin, "pip", "install",
+            "--python", str(py_bin),
+            "--prerelease=allow",
+            "blake3>=1.0.0",
+            "flashinfer_python[cu13]==0.7.3",
+            "humming-kernels[cu13]==0.1.18",
+            "sgl-deep-gemm==0.2.7",
+            "sgl-flash-mla==1.0.4",
+            "pillow<13",
+        ],
+        env_log,
+    )
+    shutil.rmtree("/root/.cache/uv", ignore_errors=True)
+
+    run_logged(
+        [
+            str(py_bin), "-c",
+            "import torch, uvicorn\n"
+            "from sglang.multimodal_gen.configs.pipeline_configs.minimax_h3_image import MiniMaxH3ImagePipelineConfig\n"
+            "from sglang.multimodal_gen.runtime.pipelines.minimax_h3_pipeline import MiniMaxH3ImagePipeline\n"
+            "print('sglang-h3-image-ok', torch.__version__, 'cuda=', torch.cuda.is_available())",
+        ],
+        env_log,
+    )
+    marker.write_text(stamp_val + "\n", encoding="utf-8")
+    h3log("SGLang Diffusion environment ready")
+    return py_bin
+
+def _patch_local_model_index(model_dir: Path):
+    """Point external text_encoder spec to the already-downloaded local subfolder to save 66.7 GB SSD."""
+    for fname in ("model_index.json", "modular_model_index.json"):
+        idx_path = model_dir / fname
+        if not idx_path.is_file():
+            continue
+        data = json.loads(idx_path.read_text(encoding="utf-8"))
+        changed = False
+        for k, spec in list(data.items()):
+            if isinstance(spec, list) and len(spec) == 3 and isinstance(spec[2], dict):
+                sub = spec[2].get("subfolder")
+                if isinstance(sub, str) and sub and (model_dir / sub / "config.json").is_file():
+                    if spec[2].get("pretrained_model_name_or_path") != str(model_dir):
+                        spec[2]["pretrained_model_name_or_path"] = str(model_dir)
+                        changed = True
+            elif isinstance(spec, dict) and isinstance(spec.get("subfolder"), str):
+                sub = spec["subfolder"]
+                if (model_dir / sub / "config.json").is_file() and spec.get("pretrained_model_name_or_path") != str(model_dir):
+                    spec["pretrained_model_name_or_path"] = str(model_dir)
+                    changed = True
+        if changed:
+            tmp = idx_path.with_name(f".{fname}.tmp")
+            tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            os.replace(tmp, idx_path)
+            h3log(f"Patched {fname} -> local text_encoder at {model_dir / 'text_encoder'}")
+
+def stage_model(py_bin: Path):
+    required = (
+        MODEL_DIR / "model_index.json",
+        MODEL_DIR / "pdd_config.json",
+        MODEL_DIR / "pdd_fused_heads.safetensors",
+        MODEL_DIR / "transformer" / "config.json",
+        MODEL_DIR / "text_encoder" / "config.json",
+        MODEL_DIR / "vae" / "config.json",
+    )
+    marker = MODEL_DIR / ".h3_model_complete"
+    if all(p.is_file() for p in required) and marker.is_file():
+        _patch_local_model_index(MODEL_DIR)
+        h3log(f"Reusing staged {MODEL_REPO} weights at {MODEL_DIR}")
+        return
+
+    free_gb = shutil.disk_usage("/content").free / (1024**3)
+    if free_gb < 142.0 and not (MODEL_DIR / "transformer").is_dir():
+        raise RuntimeError(
+            f"Insufficient local SSD space on /content ({free_gb:.1f} GiB free; need >= 142 GiB for 135.3 GB MiniMax-H3-Image)."
+        )
+
+    h3log(f"Downloading {MODEL_REPO} (skipping duplicate *_diffusers copies; ~135.3 GB) -> {MODEL_DIR} ...")
+    dl_env = dict(os.environ)
+    dl_env.update({
+        "HF_XET_CHUNK_CACHE_SIZE_BYTES": "0",
+        "HF_HUB_ENABLE_HF_TRANSFER": "0",
+        "HF_HUB_DISABLE_TELEMETRY": "1",
+    })
+    dl_log = f"{WORK}/h3_download.log"
+    run_logged(
+        [
+            str(py_bin), "-c",
+            "from huggingface_hub import snapshot_download\n"
+            f"snapshot_download(\n"
+            f"    repo_id={MODEL_REPO!r},\n"
+            f"    local_dir={str(MODEL_DIR)!r},\n"
+            "    ignore_patterns=[\n"
+            "        'transformer_diffusers/*', 'vae_diffusers/*',\n"
+            "        'assets/*', 'examples/*', '*.md', '.gitattributes',\n"
+            "    ],\n"
+            "    max_workers=8,\n"
+            ")\n",
+        ],
+        dl_log,
+        env=dl_env,
+    )
+    shutil.rmtree(MODEL_DIR / ".cache", ignore_errors=True)
+    for _hfc in ("/root/.cache/huggingface/xet", "/root/.cache/huggingface/hub"):
+        shutil.rmtree(_hfc, ignore_errors=True)
+    _patch_local_model_index(MODEL_DIR)
+    marker.write_text(f"{MODEL_REPO}\n", encoding="utf-8")
+    h3log(f"Model staged cleanly; /content free SSD remaining: {shutil.disk_usage('/content').free / (1024**3):.1f} GiB")
+
+PY_BIN = prepare_env()
+stage_model(PY_BIN)
+H3_SETUP_OK = True
+h3log("Setup complete")
+'''.replace("__H3_CACHE_SOURCE__", repr((ROOT / "templates/colab_cache.py").read_text(encoding="utf-8")))
+
+MINIMAX_H3_IMAGE_SERVICE = r'''# @title 2. Service -- launch `sglang serve` on loopback + authenticated MiniMax-H3-Image gateway
+from pathlib import Path
+if not globals().get("H3_SETUP_OK"):
+    raise RuntimeError("MiniMax-H3-Image setup cell failed before completing; check setup traceback above.")
+
+(H3_WORK / "colab_asgi_common.py").write_text(__H3_ASGI_COMMON_SOURCE__, encoding="utf-8")
+(H3_WORK / "minimax_h3_image_middleware.py").write_text(__H3_MIDDLEWARE_SOURCE__, encoding="utf-8")
+
+def build_sglang_args():
+    args = [
+        str(VENV_DIR / "bin" / "sglang"),
+        "serve",
+        "--model-path", str(MODEL_DIR),
+        "--backend", "sglang",
+        "--host", "127.0.0.1",
+        "--port", str(SGLANG_PORT),
+        "--output-path", str(SGLANG_OUTPUT_DIR),
+        "--input-save-path", str(SGLANG_INPUT_DIR),
+        "--minimax-h3-adaln-online", "true",
+    ]
+    # Placement policy tuned for Colab G4 (96 GB), H100/A100 (80 GB), and smaller GPUs
+    if PLACEMENT == "resident":
+        args.extend(["--component-residency", "all=resident"])
+    elif PLACEMENT == "offload":
+        args.extend(["--component-residency", "all=component-offload"])
+    elif PLACEMENT == "layerwise":
+        args.extend([
+            "--component-residency", "all=layerwise-offload",
+            "--layerwise-prefetch-size", "transformer=1,text_encoder=1,video_vae=1",
+        ])
+    else:
+        if QUANTIZATION in ("fp8-all", "fp8", "mxfp8-all", "mxfp8") and GPU_VRAM_MIB >= 70000:
+            args.extend(["--component-residency", "all=resident"])
+        elif QUANTIZATION in ("fp8-dit", "mxfp8-dit") and GPU_VRAM_MIB >= 82000:
+            args.extend(["--component-residency", "all=resident"])
+        elif QUANTIZATION in ("bf16", "none", "native") and GPU_VRAM_MIB >= 92000:
+            args.extend(["--component-residency", "all=resident"])
+        elif GPU_VRAM_MIB >= 72000:
+            args.extend(["--component-residency", "all=resident", "text_encoder=component-offload"])
+        else:
+            args.extend([
+                "--component-residency", "all=layerwise-offload",
+                "--layerwise-prefetch-size", "transformer=1,text_encoder=1,video_vae=1",
+            ])
+
+    if QUANTIZATION in ("fp8-all", "fp8"):
+        args.extend(["--quantization", "fp8", "--component-quantizations.text_encoder", "fp8"])
+    elif QUANTIZATION == "fp8-dit":
+        args.extend(["--quantization", "fp8"])
+    elif QUANTIZATION in ("mxfp8-all", "mxfp8"):
+        args.extend(["--quantization", "mxfp8", "--component-quantizations.text_encoder", "mxfp8"])
+    elif QUANTIZATION == "mxfp8-dit":
+        args.extend(["--quantization", "mxfp8"])
+    elif QUANTIZATION not in ("bf16", "none", "native"):
+        raise ValueError(f"Unsupported CT_H3_IMAGE_QUANTIZATION={QUANTIZATION!r}")
+
+    if WARMUP_MODE == "off":
+        args.extend(["--warmup-mode", "off"])
+    elif WARMUP_MODE in ("server", "request"):
+        args.extend(["--warmup-mode", WARMUP_MODE])
+    return args
+
+def _common_runtime_env():
+    env = dict(os.environ)
+    venv_bin = str(VENV_DIR / "bin")
+    cur_path = env.get("PATH") or "/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    env.update({
+        "VIRTUAL_ENV": str(VENV_DIR),
+        "PATH": f"{venv_bin}:{cur_path}",
+        "CT_API_TOKEN": API_TOKEN,
+        "CT_SERVICE": SERVICE,
+        "CT_SERVICE_PORT": str(SERVICE_PORT),
+        "CT_H3_SGLANG_PORT": str(SGLANG_PORT),
+        "CT_H3_SGLANG_URL": f"http://127.0.0.1:{SGLANG_PORT}",
+        "CT_DATA_DIR": str(DATA_DIR),
+        "CT_H3_LOCAL_WORK_DIR": str(H3_WORK),
+        "CT_H3_IMAGE_MODEL": MODEL_REPO,
+        "CT_H3_IMAGE_ALIAS": MODEL_ALIAS,
+        "CT_H3_IMAGE_QUANTIZATION": QUANTIZATION,
+        "CT_H3_IMAGE_PLACEMENT": PLACEMENT,
+        "CT_H3_IMAGE_WARMUP": WARMUP_MODE,
+        "FLASHINFER_WORKSPACE_BASE": str(FLASHINFER_CACHE_DIR),
+        "TRITON_CACHE_DIR": str(TRITON_CACHE_DIR),
+        "TORCHINDUCTOR_CACHE_DIR": str(INDUCTOR_CACHE_DIR),
+        "SGLANG_JIT_CACHE_DIR": str(SGLANG_JIT_CACHE_DIR),
+        "SGLANG_DG_CACHE_DIR": str(SGLANG_JIT_CACHE_DIR),
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        "USE_TF": "0",
+        "USE_FLAX": "0",
+        "PYTHONPATH": f"{H3_WORK}:{env.get('PYTHONPATH', '')}".rstrip(":"),
+    })
+    return env
+
+def start_sglang():
+    if "sglang" in PROCS:
+        ct_stop_proc(PROCS["sglang"][0])
+    subprocess.run(["pkill", "-9", "-f", f"--port {SGLANG_PORT}"], check=False)
+    time.sleep(1)
+    cmd = build_sglang_args()
+    h3log("Starting SGLang Diffusion: " + " ".join(cmd))
+    proc = ct_spawn("sglang", cmd, env=_common_runtime_env(), cwd=str(H3_WORK))
+    PROCS["sglang"] = (proc, start_sglang)
+    return proc
+
+def start_service():
+    if not API_TOKEN:
+        raise RuntimeError("CT_API_TOKEN is empty; refusing to start unauthenticated MiniMax-H3-Image gateway")
+    if "sglang" not in PROCS or PROCS["sglang"][0].poll() is not None:
+        start_sglang()
+    if "service" in PROCS:
+        ct_stop_proc(PROCS["service"][0])
+    subprocess.run(["pkill", "-9", "-f", "minimax_h3_image_middleware.py"], check=False)
+    time.sleep(1)
+    proc = ct_spawn(
+        "service",
+        [str(VENV_DIR / "bin" / "python"), str(H3_WORK / "minimax_h3_image_middleware.py")],
+        env=_common_runtime_env(),
+        cwd=str(H3_WORK),
+    )
+    PROCS["service"] = (proc, start_service)
+    return proc
+
+start_sglang()
+start_service()
+h3log(f"Spawned SGLang (pid={PROCS['sglang'][0].pid} -> 127.0.0.1:{SGLANG_PORT}) + Gateway (pid={PROCS['service'][0].pid} -> 127.0.0.1:{SERVICE_PORT})")
+'''.replace(
+    "__H3_ASGI_COMMON_SOURCE__", repr((ROOT / "templates/colab_asgi_common.py").read_text(encoding="utf-8"))
+).replace(
+    "__H3_MIDDLEWARE_SOURCE__", repr((ROOT / "templates/minimax_h3_image_middleware.py").read_text(encoding="utf-8"))
+)
+
+MINIMAX_H3_IMAGE_KEEPALIVE = r'''# @title 5. Readiness gate, page-cache release, compiler cache archiving & watchdog
+import urllib.error
+import urllib.request
+if not globals().get("H3_SETUP_OK") or "service" not in PROCS or "sglang" not in PROCS:
+    raise RuntimeError("MiniMax-H3-Image did not start because an earlier notebook cell failed; see traceback above.")
+
+def http_json(url, token="", payload=None, timeout=20):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = None
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST" if data is not None else "GET")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({})) if "127.0.0.1" in url else urllib.request.build_opener()
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            body = r.read().decode("utf-8", errors="replace")
+            return r.status, (json.loads(body) if body.strip().startswith("{") else {})
+    except urllib.error.HTTPError as e:
+        return e.code, {}
+
+def auth_check(base, token):
+    for candidate, expected in (("", 401), ("invalid-probe-token", 401), (token, 200)):
+        code, _ = http_json(base + "/v1/models", candidate)
+        if code != expected:
+            raise RuntimeError(f"Auth test failed on {base}/v1/models: expected {expected}, got {code}")
+
+LOCAL_BASE = f"http://127.0.0.1:{SERVICE_PORT}"
+deadline = time.monotonic() + 3600
+last_notice = 0
+while time.monotonic() < deadline:
+    if PROCS["sglang"][0].poll() is not None:
+        raise RuntimeError("SGLang exited during startup:\n" + ct_tail("sglang", 90))
+    if PROCS["service"][0].poll() is not None:
+        raise RuntimeError("MiniMax-H3-Image gateway exited during startup:\n" + ct_tail("service", 60))
+    try:
+        code, _ = http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)
+        if code == 200:
+            break
+    except Exception:
+        pass
+    if time.monotonic() - last_notice >= 20:
+        last_line = (ct_tail("sglang", 4).strip().splitlines() or ["loading 66.5B weights & warming PDD grids..."])[-1]
+        h3log(f"Waiting for SGLang Diffusion | GPU: {ct_gpu_stat()} | {last_line[:110]}")
+        last_notice = time.monotonic()
+    time.sleep(5)
+else:
+    raise RuntimeError("Timed out waiting for SGLang Diffusion to become ready:\n" + ct_tail("sglang", 90))
+
+auth_check(LOCAL_BASE, API_TOKEN)
+
+# Drop 135 GB of cold .safetensors pages from Linux host page cache once resident in VRAM
+if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+    _dropped = 0
+    for _sf in MODEL_DIR.rglob("*.safetensors"):
+        try:
+            _fd = os.open(str(_sf), os.O_RDONLY)
+            try:
+                os.posix_fadvise(_fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                _dropped += 1
+            finally:
+                os.close(_fd)
+        except OSError:
+            pass
+    h3log(f"Released Linux page cache on {_dropped} safetensors shard(s)")
+
+for _loc_c, _leg_c in CACHE_PAIRS:
+    try:
+        save_cache(_loc_c, CACHE_ARCHIVES, CACHE_KEY, h3log)
+    except (OSError, ValueError) as _cerr:
+        h3log(f"Cache archive save warning ({_loc_c.name}): {_cerr}")
+
+ct_public_gate(
+    PUBLIC_URL,
+    lambda: http_json(PUBLIC_URL + "/v1/models", API_TOKEN, timeout=15)[0],
+    lambda: auth_check(PUBLIC_URL, API_TOKEN),
+    h3log,
+    timeout=180,
+    interval=8,
+)
+h3log(f"Public endpoint verified: {PUBLIC_URL}/v1/models")
+
+print(f"{SERVICE} is up: {PUBLIC_URL} (model={MODEL_REPO}, quant={QUANTIZATION})")
+print("CT_READY", flush=True)
+
+ct_watchdog(
+    lambda: http_json(LOCAL_BASE + "/health", API_TOKEN, timeout=10)[0] == 200,
+    start_service,
+    h3log,
+    log_name="sglang",
+    grace=1200,
+    heartbeat=lambda up: h3log(f"heartbeat | up={up}s | GPU: {ct_gpu_stat()}"),
+)
+'''
+
 if __name__ == "__main__":
+    write(ROOT / "src/colabllm/services/minimax-h3-image.ipynb",
+          notebook("MiniMax-H3-Image (G4 / H100 / A100 · SGLang Diffusion 6-Step PDD Native 4K T2I & 1–16 Ref I2I)",
+                   "Serves `MiniMaxAI/MiniMax-H3-Image` (33.1B DiT + 33.4B Qwen3-VL encoder + MiniMaxH3ImageVAE, "
+                   "6-step fused PDD schedule, online AdaLN precomputation) on a Colab G4 GPU by default "
+                   "(`--quantization fp8-all` resident ~50.4 GiB VRAM, 2.34s@2K / 14.45s@4K, or `--quantization bf16` "
+                   "native lossless ~92.2 GiB VRAM) via SGLang Diffusion with fail-closed Bearer token auth, "
+                   "network-friendly async `/api/ct/jobs` + content-addressed binary uploads + resumable `Range` "
+                   "downloads, OpenAI `/v1/images/*` compatibility, and zero-transfer Google Drive I/O.",
+                   MINIMAX_H3_IMAGE_CFG, MINIMAX_H3_IMAGE_SETUP, MINIMAX_H3_IMAGE_SERVICE,
+                   keepalive=MINIMAX_H3_IMAGE_KEEPALIVE))
     write(ROOT / "src/colabllm/services/tangoflux.ipynb",
           notebook("TangoFlux (T4 / L4 / G4 · 44.1 kHz Stereo Text-to-Audio & Sound Effect Generation)",
                    "Serves `declare-lab/TangoFlux` (CRPO preference-optimized 515M FluxTransformer + Flan-T5-Large + "

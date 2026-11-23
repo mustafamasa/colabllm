@@ -49,6 +49,13 @@ from pathlib import Path
 
 from paths import private_dir, user_home
 from cli_support import CliError, UsageError, command_timeout, positive_seconds, diagnostic, safe_urlopen
+from colab_accounts import (
+    account_sessions_path,
+    colab_subprocess_env,
+    resolve_effective_account,
+    resolve_effective_drive_account,
+    validate_account,
+)
 from protocol import NotebookProtocol
 from processes import owned_process, process_identity, runner_alive, stop_owned_process
 
@@ -76,6 +83,8 @@ class Service:
     base_name: str = ""             # base service name before --instance suffix
     base_default_hostname: str | None = None
     instance: str | None = None     # optional instance id (-i / --instance)
+    account: str | None = None      # optional Colab account name/email (--account)
+    drive_account: str | None = None  # optional shared Google Drive storage account (--drive-account)
 
     def __post_init__(self) -> None:
         if not self.base_name:
@@ -86,6 +95,35 @@ class Service:
     @property
     def tunnel_port(self) -> int:
         return self.public_port if self.auth == "caddy" else self.service_port
+
+
+def extract_account_arg(argv: list[str] | None = None) -> tuple[str | None, list[str]]:
+    """Extract `--account <acct>` / `--account=<acct>` from anywhere before `--`.
+
+    Short `-a` is intentionally NOT stripped here because business subcommands such as
+    `minimax-h3-image generate -a 16:9` use `-a` for `--aspect`.
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+    acct: str | None = None
+    cleaned: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            cleaned.extend(args[i:])
+            break
+        if a == "--account":
+            if i + 1 >= len(args) or args[i + 1].startswith("-"):
+                raise UsageError("--account requires a valid Colab account name or email")
+            acct = validate_account(args[i + 1])
+            i += 2
+        elif a.startswith("--account="):
+            acct = validate_account(a.split("=", 1)[1])
+            i += 1
+        else:
+            cleaned.append(a)
+            i += 1
+    return acct, cleaned
 
 
 def extract_instance_arg(argv: list[str] | None = None) -> tuple[str | None, list[str]]:
@@ -223,18 +261,22 @@ def tunnel_hostname(svc: Service, args) -> str | None:
     return validate_domain(f'{alias}.{base}')
 
 
-def cmd_tunnel_config(args) -> None:
-    path = STATE_ROOT / 'tunnel-config.json'
+def update_tunnel_config(*, base_domain=None, clear=False) -> dict:
     saved=load_tunnel_config()
-    if args.clear:
+    if clear:
         if saved.get('frp',{}).get('enabled'):
             raise ValueError('FRP requires a base domain; disable FRP before clearing it')
         saved.pop('base_domain',None)
         save_tunnel_config(saved)
-    elif args.base_domain is not None:
-        saved['base_domain']=validate_domain(args.base_domain)
+    elif base_domain is not None:
+        saved['base_domain']=validate_domain(base_domain)
         save_tunnel_config(saved)
-    saved = load_tunnel_config()
+    return load_tunnel_config()
+
+
+def cmd_tunnel_config(args) -> None:
+    path = STATE_ROOT / 'tunnel-config.json'
+    saved = update_tunnel_config(base_domain=args.base_domain, clear=args.clear)
     print(json.dumps({'base_domain': saved.get('base_domain'),
                       'transport': 'frp' if saved.get('frp',{}).get('enabled') else 'cloudflare',
                       'frp': saved.get('frp'),
@@ -286,14 +328,35 @@ def list_service_instances(base_name: str) -> list[dict]:
             "alive": alive,
             "running": alive,
             "ready": bool(st.get("ready") and alive),
+            "auto_restart": bool(st.get("auto_restart")),
+            "restart_count": int(st.get("restart_count", 0)),
             "runner_pid": st.get("runner_pid"),
             "url": st.get("url"),
+            "account": st.get("account"),
+            "drive_account": st.get("drive_account"),
             "api_token": st.get("api_token"),
             "auth_user": st.get("auth_user"),
             "auth_pass": st.get("auth_pass"),
             "started": st.get("started"),
         })
     return items
+
+
+def colab_env_for(svc: Service) -> dict[str, str] | None:
+    return colab_subprocess_env(svc.account, svc.drive_account)
+
+
+def colab_env_for_session(session_name: str, explicit_account: str | None = None) -> dict[str, str] | None:
+    st: dict = {}
+    sp = STATE_ROOT / "services" / session_name / "state.json"
+    if sp.is_file():
+        with contextlib.suppress(OSError, ValueError, UnicodeError):
+            loaded = json.loads(sp.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                st = loaded
+    acct, _ = resolve_effective_account(explicit=explicit_account, saved=st.get("account"), prefer_saved=True)
+    drv = st.get("drive_account") if (not explicit_account or acct == st.get("account")) else None
+    return colab_subprocess_env(acct, drv)
 
 
 # --------------------------------------------------------------------------- utils
@@ -314,11 +377,20 @@ def banner(lines: list[str]) -> None:
     print("\n" + "=" * w + "\n" + "\n".join(f"    {line}" for line in lines) + "\n" + "=" * w + "\n", flush=True)
 
 
-def run(cmd: list[str], *, capture: bool = False, check: bool = True, input: str | None = None, timeout=None):
+def run(
+    cmd: list[str],
+    *,
+    capture: bool = False,
+    check: bool = True,
+    input: str | None = None,
+    timeout=None,
+    env: dict[str, str] | None = None,
+):
     res = subprocess.run(cmd, text=True, input=input,
                          stdout=subprocess.PIPE if capture else None,
                          stderr=subprocess.PIPE if capture else None,
-                         timeout=command_timeout() if timeout is None else timeout)
+                         timeout=command_timeout() if timeout is None else timeout,
+                         env=env)
     if check and res.returncode != 0:
         if capture:
             sys.stderr.write((res.stdout or "") + (res.stderr or ""))
@@ -552,6 +624,48 @@ def _write_private_notebook(nb_path: Path, built: dict, env: dict | None = None)
 
 
 # --------------------------------------------------------------------------- runner (attached `colab exec`)
+DEFAULT_RESTART_DELAY = 3.0
+MAX_RESTART_BACKOFF = 300.0
+DEFAULT_FAST_PROBE_SECONDS = 10.0
+DEFAULT_FAST_PROBE_TIMEOUT = 5.0
+DEFAULT_IDLE_CHECK_SECONDS = 300.0
+DEFAULT_SILENT_RECHECK_SECONDS = 60.0
+DEFAULT_MAX_STARTUP_RETRIES = 3
+
+
+def nonnegative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise ValueError("Invalid integer") from None
+    if parsed < 0:
+        raise ValueError("Value must not be less than 0")
+    return parsed
+
+
+def parse_colab_session_status(session_name: str, returncode: int, stdout: str = "", stderr: str = "") -> str:
+    """Classify `colab status -s <name>` output into 'alive', 'missing', or 'unknown'.
+
+    Note: `colab status` returns exit code 0 even when the VM was reclaimed
+    (`[colab] Session '<name>' not found.`), so text inspection is required.
+    """
+    combined = f"{stdout or ''}\n{stderr or ''}"
+    lower = combined.lower()
+    if "not found" in lower or "no active session" in lower or "does not exist" in lower:
+        return "missing"
+    if returncode == 0 and f"[{session_name}]" in combined:
+        return "alive"
+    return "unknown"
+
+
+def check_remote_session(svc: Service, timeout: float = 30.0) -> str:
+    try:
+        res = run(["colab", "status", "-s", svc.name], capture=True, check=False, timeout=timeout, env=colab_env_for(svc))
+    except (OSError, subprocess.SubprocessError, CliError):
+        return "unknown"
+    return parse_colab_session_status(svc.name, res.returncode, res.stdout or "", res.stderr or "")
+
+
 def finish_runner(state, pid, identity, exit_code=None):
     def finish(st):
         if st.get("runner_pid") == pid and st.get("runner_identity") == identity:
@@ -561,12 +675,215 @@ def finish_runner(state, pid, identity, exit_code=None):
     state.update(finish)
 
 
+def _runner_still_owned(state: State, pid: int, identity: str | None) -> tuple[bool, dict]:
+    st = state.load()
+    return bool(identity and st.get("runner_pid") == pid and st.get("runner_identity") == identity), st
+
+
+def _probe_service_endpoint(
+    svc: Service, st: dict, url_override: str | None = None, *, timeout: float = 15.0
+) -> str:
+    url = (url_override or st.get("url") or "").strip()
+    if not url:
+        return "missing-url"
+    if svc.auth == "caddy":
+        return probe(url, (st.get("auth_user", ""), st.get("auth_pass", "")), timeout=timeout)
+    if svc.auth == "builtin" and st.get("api_token") and not st.get("login_user"):
+        return probe(url.rstrip("/") + "/v1/models", bearer=st["api_token"], timeout=timeout)
+    return probe(url, timeout=timeout)
+
+
+def _run_single_exec(
+    svc: Service,
+    state: State,
+    cmd: list[str],
+    *,
+    deadline: float | None,
+    auto_restart: bool,
+    idle_check_seconds: float,
+    fast_probe_seconds: float = DEFAULT_FAST_PROBE_SECONDS,
+    initially_ready: bool = False,
+) -> tuple[int, bool, bool]:
+    """Run one `colab exec` session and return `(exit_code, reached_ready, half_open_reclaimed)`."""
+    proc = None
+    child_identity = None
+    selector = selectors.DefaultSelector()
+    reached_ready = bool(initially_ready)
+    half_open_reclaimed = False
+    st = state.save(ready=bool(initially_ready))
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            env=colab_env_for(svc),
+        )
+        child_identity = process_identity(proc.pid)
+        st = state.save(exec_pid=proc.pid, exec_identity=child_identity)
+        protocol = NotebookProtocol()
+        selector.register(proc.stdout, selectors.EVENT_READ)
+        now0 = time.monotonic()
+        next_idle_probe_at = now0 + idle_check_seconds
+        next_fast_probe_at = now0 + fast_probe_seconds
+        next_status_allowed_at = 0.0
+        while True:
+            now = time.monotonic()
+            wait_timeout = None
+            if deadline is not None and not st.get("ready"):
+                remaining = max(0.0, deadline - now)
+                if remaining == 0:
+                    raise TimeoutError("Timed out waiting for CT_READY; the foreground connection was stopped. Use status to check the remote session")
+                wait_timeout = remaining
+            elif auto_restart and st.get("ready"):
+                wakeups: list[float] = []
+                if idle_check_seconds > 0:
+                    wakeups.append(next_idle_probe_at - now)
+                if fast_probe_seconds > 0 and st.get("url"):
+                    wakeups.append(next_fast_probe_at - now)
+                if wakeups:
+                    wait_timeout = max(0.0, min(wakeups))
+            if not selector.select(wait_timeout):
+                now = time.monotonic()
+                if deadline is not None and not st.get("ready") and now >= deadline:
+                    continue
+                if auto_restart and st.get("ready"):
+                    need_remote_check = False
+                    if idle_check_seconds > 0 and now >= next_idle_probe_at:
+                        need_remote_check = True
+                        next_idle_probe_at = now + min(idle_check_seconds, DEFAULT_SILENT_RECHECK_SECONDS)
+                    if fast_probe_seconds > 0 and st.get("url") and now >= next_fast_probe_at:
+                        code = _probe_service_endpoint(
+                            svc, st, timeout=min(DEFAULT_FAST_PROBE_TIMEOUT, max(0.5, fast_probe_seconds))
+                        )
+                        next_fast_probe_at = time.monotonic() + fast_probe_seconds
+                        if code.isdigit() and 200 <= int(code) < 500:
+                            next_status_allowed_at = 0.0
+                        elif time.monotonic() >= next_status_allowed_at:
+                            need_remote_check = True
+                    if need_remote_check:
+                        if check_remote_session(svc) == "missing":
+                            warn(f"[auto-restart] Remote session '{svc.name}' is gone (detected by idle or edge probe); disconnecting and restoring immediately")
+                            half_open_reclaimed = True
+                            break
+                        cooldown = (
+                            min(idle_check_seconds, DEFAULT_SILENT_RECHECK_SECONDS)
+                            if idle_check_seconds > 0
+                            else DEFAULT_SILENT_RECHECK_SECONDS
+                        )
+                        next_status_allowed_at = time.monotonic() + cooldown
+                continue
+            chunk = os.read(proc.stdout.fileno(), 65536)
+            if not chunk:
+                break
+            now_read = time.monotonic()
+            next_idle_probe_at = now_read + idle_check_seconds
+            next_fast_probe_at = now_read + fast_probe_seconds
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.flush()
+            update = {key: value for key, value in protocol.feed(chunk).items() if st.get(key) != value}
+            if update:
+                st = state.save(**update)
+                if st.get("ready"):
+                    reached_ready = True
+        update = protocol.feed(b"", final=True)
+        if update:
+            st = state.save(**update)
+            if st.get("ready"):
+                reached_ready = True
+        if half_open_reclaimed:
+            stop_owned_process(proc.pid, child_identity, group=True)
+            rc = 1
+        else:
+            rc = proc.wait()
+            if rc == 0 and not st.get("ready"):
+                warn("Colab exited before CT_READY; check the log for startup errors")
+                rc = 1
+        return (rc if rc >= 0 else 128 - rc), reached_ready, half_open_reclaimed
+    finally:
+        selector.close()
+        if proc is not None:
+            stop_owned_process(proc.pid, child_identity, group=True)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=5)
+            if proc.stdout:
+                proc.stdout.close()
+
+
+def _provision_session_for_restart(
+    svc: Service,
+    state: State,
+    pid: int,
+    identity: str | None,
+    *,
+    previous_url: str | None = None,
+) -> str:
+    """Verify remote session state under `.operation.lock` and reconnect or recreate the Colab VM.
+
+    Returns `'reattached_ready'` (live VM + live HTTP endpoint), `'ready'`, `'stopped'`, or `'failed'`.
+    """
+    with state.lock("operation", blocking=True):
+        owned, st = _runner_still_owned(state, pid, identity)
+        if not owned:
+            return "stopped"
+        target_svc = dataclasses.replace(
+            svc,
+            gpu=st["session_gpu"] if "session_gpu" in st else svc.gpu,
+            tpu=st["session_tpu"] if "session_tpu" in st else svc.tpu,
+            high_mem=bool(st["session_high_mem"]) if "session_high_mem" in st else svc.high_mem,
+            account=st.get("account") or svc.account,
+            drive_account=st.get("drive_account") or svc.drive_account,
+        )
+        target_env = colab_env_for(target_svc)
+        mount_drive = bool(st.get("mount_drive", True))
+        try:
+            remote = check_remote_session(target_svc)
+            if remote == "alive":
+                log(f"[auto-restart] Remote session '{target_svc.name}' is still alive; restoring the mount and keep-alive connection")
+                remount_ok = True
+                if mount_drive:
+                    try:
+                        log("colab dfs mount")
+                        run(["colab", "dfs", "mount", "-s", target_svc.name], env=target_env)
+                    except (CliError, OSError, subprocess.SubprocessError) as err:
+                        warn(f"[auto-restart] Failed to restore the existing session mount ({err}); cleaning up and recreating the session")
+                        remount_ok = False
+                if remount_ok:
+                    candidate_url = previous_url or st.get("url")
+                    if candidate_url:
+                        code = _probe_service_endpoint(svc, st, url_override=candidate_url)
+                        if code.isdigit() and 200 <= int(code) < 400:
+                            state.save(url=candidate_url, ready=True)
+                            log(f"[auto-restart] Remote service probe succeeded (HTTP {code}); keeping ready=True and reattaching")
+                            return "reattached_ready"
+                    return "ready"
+            log(f"[auto-restart] Remote session '{target_svc.name}' has stopped; cleaning up and recreating the instance")
+            run(["colab", "stop", "-s", target_svc.name], capture=True, check=False, env=target_env)
+            ensure_session(target_svc, force_new=True)
+            if mount_drive:
+                log("colab dfs mount")
+                run(["colab", "dfs", "mount", "-s", target_svc.name], env=target_env)
+            return "ready"
+        except (CliError, OSError, subprocess.SubprocessError) as err:
+            warn(f"[auto-restart] Session recovery failed: {err}")
+            return "failed"
+
+
+def _compute_backoff_delay(base_delay: float, consecutive_failures: int) -> float:
+    if consecutive_failures <= 0:
+        return base_delay
+    exponent = min(consecutive_failures - 1, 8)
+    return min(MAX_RESTART_BACKOFF, base_delay * (2 ** exponent))
+
+
 def exec_runner(svc: Service, nb_path: Path) -> int:
-    """Own the Colab connection and always reap its separate process group."""
+    """Own the Colab connection, reap its process group, and optionally supervise auto-restarts."""
     state = State(svc)
     st = state.load()
+    svc.account = svc.account or st.get("account")
+    svc.drive_account = svc.drive_account or st.get("drive_account")
     pid, identity = os.getpid(), process_identity(os.getpid())
-    state.save(runner_pid=pid, runner_identity=identity)
+    st = state.save(runner_pid=pid, runner_identity=identity)
     if nb_path.is_file() and st.get("env"):
         try:
             current_nb = json.loads(nb_path.read_text(encoding="utf-8"))
@@ -579,63 +896,163 @@ def exec_runner(svc: Service, nb_path: Path) -> int:
         "--timeout", str(7 * 24 * 3600),
         "--env", f"CT_SERVICE={svc.name}",
     ]
-    proc = None
-    child_identity = None
+    auto_restart = bool(st.get("auto_restart"))
+    base_delay = float(st.get("restart_delay") or DEFAULT_RESTART_DELAY)
+    max_restarts = int(st.get("max_restarts") or 0)
+    saved_idle_check = float(st.get("idle_check_seconds") or DEFAULT_IDLE_CHECK_SECONDS)
+    try:
+        idle_check_seconds = float(os.environ.get("COLABLLM_IDLE_CHECK_SECONDS", saved_idle_check))
+    except ValueError:
+        idle_check_seconds = saved_idle_check
+    try:
+        fast_probe_seconds = float(os.environ.get("COLABLLM_FAST_PROBE_SECONDS", DEFAULT_FAST_PROBE_SECONDS))
+    except ValueError:
+        fast_probe_seconds = DEFAULT_FAST_PROBE_SECONDS
+    try:
+        max_startup_retries = max(1, int(os.environ.get("COLABLLM_MAX_STARTUP_RETRIES", DEFAULT_MAX_STARTUP_RETRIES)))
+    except ValueError:
+        max_startup_retries = DEFAULT_MAX_STARTUP_RETRIES
+
     old_handler = signal.getsignal(signal.SIGTERM)
     def terminated(signum, frame):
         raise SystemExit(128 + signum)
     signal.signal(signal.SIGTERM, terminated)
     rc = None
-    selector = selectors.DefaultSelector()
     try:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
-        child_identity = process_identity(proc.pid)
-        state.save(exec_pid=proc.pid, exec_identity=child_identity)
-        protocol = NotebookProtocol()
-        selector.register(proc.stdout, selectors.EVENT_READ)
-        deadline = time.monotonic() + st.get('ready_timeout', svc.ready_timeout) if st.get('runner_mode') == 'foreground' else None
+        ready_timeout = st.get("ready_timeout", svc.ready_timeout)
+        is_foreground = st.get("runner_mode") == "foreground"
+        already_ready = bool(st.get("ready") and st.get("url"))
+        if not auto_restart:
+            deadline = time.monotonic() + ready_timeout if (is_foreground and not already_ready) else None
+            rc, _, _ = _run_single_exec(
+                svc,
+                state,
+                cmd,
+                deadline=deadline,
+                auto_restart=False,
+                idle_check_seconds=0.0,
+                initially_ready=already_ready,
+            )
+            return rc
+
+        ever_ready = already_ready
+        consecutive_failures = 0
+        restart_count = int(st.get("restart_count") or 0)
+        attempt = 0
+        reattached_ready = already_ready
         while True:
-            remaining = max(0, deadline - time.monotonic()) if deadline is not None and not st.get('ready') else None
-            if remaining == 0:
-                raise TimeoutError('Timed out waiting for CT_READY; the foreground connection was stopped. Use status to check the remote session')
-            if not selector.select(remaining):
-                continue
-            chunk = os.read(proc.stdout.fileno(), 65536)
-            if not chunk:
-                break
-            sys.stdout.buffer.write(chunk)
+            deadline = (
+                time.monotonic() + ready_timeout
+                if (not reattached_ready and (is_foreground or attempt > 0))
+                else None
+            )
+            last_timeout_err: TimeoutError | None = None
+            reached_ready = False
+            half_open_reclaimed = False
+            try:
+                rc, reached_ready, half_open_reclaimed = _run_single_exec(
+                    svc,
+                    state,
+                    cmd,
+                    deadline=deadline,
+                    auto_restart=True,
+                    idle_check_seconds=idle_check_seconds,
+                    fast_probe_seconds=fast_probe_seconds,
+                    initially_ready=reattached_ready,
+                )
+            except TimeoutError as err:
+                last_timeout_err = err
+                rc = 124
+                warn(f"[auto-restart] Timed out waiting for CT_READY ({ready_timeout}s)")
+
+            owned, st = _runner_still_owned(state, pid, identity)
+            if not owned:
+                rc = 0
+                return 0
+
+            if reached_ready:
+                ever_ready = True
+                consecutive_failures = 0
+            else:
+                consecutive_failures += 1
+
+            if not ever_ready and consecutive_failures >= max_startup_retries:
+                warn(f"[auto-restart] Initial startup failed to become ready {consecutive_failures} times; stopping retries")
+                if last_timeout_err is not None:
+                    raise last_timeout_err
+                return rc or 1
+
+            if max_restarts > 0 and restart_count >= max_restarts:
+                warn(f"[auto-restart] Maximum restart count reached ({max_restarts}); stopping supervisor")
+                if last_timeout_err is not None and not reached_ready:
+                    raise last_timeout_err
+                return rc or 1
+
+            restart_count += 1
+            previous_url = st.get("url")
+            keep_url = previous_url if st.get("hostname") else None
+            st = state.save(
+                ready=False,
+                url=keep_url,
+                exec_pid=None,
+                exec_identity=None,
+                last_cell_started=False,
+                restart_count=restart_count,
+            )
+
+            delay = 0.0 if half_open_reclaimed else _compute_backoff_delay(
+                base_delay, 0 if reached_ready else consecutive_failures
+            )
+            if delay > 0:
+                log(f"[auto-restart #{restart_count}] Runtime stopped (exit={rc}); checking and restoring the session in {delay:g}s")
+                time.sleep(delay)
+            else:
+                log(f"[auto-restart #{restart_count}] Remote session confirmed stopped; restoring immediately")
+
+            reattached_ready = False
+            while True:
+                status_result = _provision_session_for_restart(
+                    svc, state, pid, identity, previous_url=previous_url
+                )
+                if status_result == "stopped":
+                    rc = 0
+                    return 0
+                if status_result in ("ready", "reattached_ready"):
+                    reattached_ready = status_result == "reattached_ready"
+                    break
+                consecutive_failures += 1
+                if not ever_ready and consecutive_failures >= max_startup_retries:
+                    warn(f"[auto-restart] Initial startup failed {consecutive_failures} times; stopping retries")
+                    return 1
+                retry_delay = _compute_backoff_delay(base_delay, consecutive_failures)
+                warn(f"[auto-restart #{restart_count}] Retrying session recreation in {retry_delay:g}s")
+                time.sleep(retry_delay)
+
+            now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            state.save(started=now_str, last_restart=now_str)
+            header = f"\n=== [colabsvc] auto-restart #{restart_count} at {now_str} ({svc.name}) ===\n"
+            sys.stdout.buffer.write(header.encode("utf-8"))
             sys.stdout.flush()
-            update = {key: value for key, value in protocol.feed(chunk).items() if st.get(key) != value}
-            if update:
-                st = state.save(**update)
-        update = protocol.feed(b"", final=True)
-        if update:
-            st = state.save(**update)
-        rc = proc.wait()
-        if rc == 0 and not st.get("ready"):
-            warn("Colab exited before CT_READY; check the log for startup errors")
-            rc = 1
-        return rc if rc >= 0 else 128 - rc
+            attempt += 1
     finally:
         signal.signal(signal.SIGTERM, old_handler)
-        selector.close()
-        if proc is not None:
-            stop_owned_process(proc.pid, child_identity, group=True)
-            proc.wait(timeout=5)
-            if proc.stdout:
-                proc.stdout.close()
         finish_runner(state, pid, identity, rc)
 
 
 # --------------------------------------------------------------------------- commands
-def ensure_session(svc: Service) -> None:
-    try:
-        sessions = json.loads((Path.home() / ".config/colab-cli/sessions.json").read_text())
-    except Exception:
-        sessions = {}
-    if svc.name in sessions:
-        log(f"reusing Colab session '{svc.name}'")
-        return
+def ensure_session(svc: Service, *, force_new: bool = False) -> bool:
+    env = colab_env_for(svc)
+    if not force_new:
+        try:
+            sessions = json.loads(account_sessions_path(svc.account).read_text(encoding="utf-8"))
+        except Exception:
+            sessions = {}
+        if svc.name in sessions:
+            if check_remote_session(svc) != "missing":
+                log(f"reusing Colab session '{svc.name}'")
+                return True
+            log(f"stale Colab session '{svc.name}' was reclaimed remotely; recreating")
+            run(["colab", "stop", "-s", svc.name], capture=True, check=False, env=env)
     args = ["colab", "new", "-s", svc.name]
     if svc.tpu:
         args += ["--tpu", svc.tpu]
@@ -644,7 +1061,8 @@ def ensure_session(svc: Service) -> None:
     if svc.high_mem:
         args += ["--high-mem"]
     log(" ".join(args))
-    run(args)
+    run(args, env=env)
+    return False
 
 
 def cmd_up(svc: Service, script: Path, a) -> None:
@@ -666,6 +1084,15 @@ def cmd_up(svc: Service, script: Path, a) -> None:
 
 
 def _start_up(svc: Service, script: Path, a):
+    auto_restart = bool(getattr(a, "auto_restart", False))
+    restart_delay = getattr(a, "restart_delay", None)
+    idle_check = getattr(a, "idle_check", None)
+    max_restarts = int(getattr(a, "max_restarts", 0) or 0)
+    if (restart_delay is not None or idle_check is not None or max_restarts > 0) and not auto_restart:
+        raise ValueError("--restart-delay, --idle-check and --max-restarts require --auto-restart")
+    explicit_drive = getattr(a, "drive_account", None)
+    if explicit_drive and a.no_drive:
+        raise ValueError("--drive-account cannot be used with --no-drive")
     hostname = tunnel_hostname(svc, a)
     transport=tunnel_transport(a)
     frp_config=None
@@ -688,11 +1115,35 @@ def _start_up(svc: Service, script: Path, a):
     if runner_alive(st):
         die(f"'{svc.name}' is already running (runner pid {st['runner_pid']}); use `down` first")
 
+    acct, _ = resolve_effective_account(
+        explicit=svc.account,
+        saved=st.get("account"),
+        prefer_saved=False,
+        reattach_session=svc.name,
+    )
+    svc.account = acct
+    if a.no_drive:
+        svc.drive_account = None
+    else:
+        saved_drv = st.get("drive_account") if (acct and acct == st.get("account")) else None
+        drv, _ = resolve_effective_drive_account(
+            acct,
+            explicit_drive=explicit_drive,
+            saved_drive=saved_drv,
+            prefer_saved=False,
+        )
+        svc.drive_account = drv
+
     nb_src = (script.parent / svc.notebook).resolve()
     skip = {int(x) for x in a.skip.split(",")} if a.skip else set()
     built, plan = build_notebook(nb_src, skip)
+    acct_desc = ""
+    if svc.account:
+        acct_desc = f", account {svc.account}"
+        if svc.drive_account and svc.drive_account != svc.account:
+            acct_desc += f" (drive {svc.drive_account})"
     log(f"service {svc.name}: notebook {nb_src.name}, gpu {svc.tpu or svc.gpu or 'cpu'}, auth {svc.auth}, "
-        f"transport {transport}, {'domain ' + hostname if hostname else 'quick tunnel'}")
+        f"transport {transport}, {'domain ' + hostname if hostname else 'quick tunnel'}{acct_desc}")
     print("\n".join(plan))
     if a.dry_run:
         return
@@ -761,15 +1212,37 @@ def _start_up(svc: Service, script: Path, a):
         st=state.save(transport=transport)
     _write_private_notebook(nb_path, built, env)
     # 2. session + 3. Drive
-    ensure_session(svc)
+    previous_url = st.get("url")
+    reused_session = ensure_session(svc) is True
     if not a.no_drive:
-        log("colab dfs mount")
-        run(["colab", "dfs", "mount", "-s", svc.name])
+        drv_note = f" (drive {svc.drive_account})" if svc.drive_account and svc.drive_account != svc.account else ""
+        log(f"colab dfs mount{drv_note}")
+        run(["colab", "dfs", "mount", "-s", svc.name], env=colab_env_for(svc))
+    initial_url = None
+    initial_ready = False
+    if reused_session and not a.new_credentials:
+        candidate_url = f"https://{hostname}" if hostname else previous_url
+        if candidate_url:
+            code = _probe_service_endpoint(svc, st, url_override=candidate_url, timeout=5.0)
+            if code.isdigit() and 200 <= int(code) < 400:
+                log(f"Remote service is already running (HTTP {code}); reusing the instance and adopting keep-alive")
+                initial_url = candidate_url
+                initial_ready = True
     st = state.save(
         base_service=svc.base_name or svc.name,
-        env=env, url=None, ready=False, last_cell_started=False, login_user=None, login_pass=None,
+        account=svc.account,
+        drive_account=svc.drive_account,
+        env=env, url=initial_url, ready=initial_ready, last_cell_started=False, login_user=None, login_pass=None,
         runner_exit=None, ready_timeout=getattr(a, "ready_timeout", None) or svc.ready_timeout,
         started=time.strftime("%Y-%m-%d %H:%M:%S"), gpu=svc.tpu or svc.gpu or "none",
+        session_gpu=svc.gpu, session_tpu=svc.tpu, session_high_mem=bool(svc.high_mem),
+        mount_drive=not a.no_drive,
+        auto_restart=auto_restart,
+        restart_delay=float(restart_delay if restart_delay is not None else DEFAULT_RESTART_DELAY),
+        idle_check_seconds=float(idle_check if idle_check is not None else DEFAULT_IDLE_CHECK_SECONDS),
+        max_restarts=max_restarts,
+        restart_count=0,
+        last_restart=None,
     )
 
     # 4. notebook through an attached `colab exec` (keep-alive)
@@ -827,7 +1300,13 @@ def _wait_ready(svc, proc, timeout=None):
     show_info(svc, do_probe=True, reveal=False)
 
 
-def probe(url: str, auth: tuple[str, str] | None = None, bearer: str | None = None) -> str:
+def probe(
+    url: str,
+    auth: tuple[str, str] | None = None,
+    bearer: str | None = None,
+    *,
+    timeout: float = 15.0,
+) -> str:
     ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
     req = urllib.request.Request(url, headers={"User-Agent": ua})
     if auth:
@@ -836,7 +1315,7 @@ def probe(url: str, auth: tuple[str, str] | None = None, bearer: str | None = No
     elif bearer:
         req.add_header("Authorization", f"Bearer {bearer}")
     try:
-        with safe_urlopen(req, timeout=15) as r:
+        with safe_urlopen(req, timeout=timeout) as r:
             return str(r.status)
     except urllib.error.HTTPError as e:
         return str(e.code)
@@ -844,13 +1323,31 @@ def probe(url: str, auth: tuple[str, str] | None = None, bearer: str | None = No
         return f"error ({type(e).__name__})"
 
 
-def show_info(svc: Service, do_probe=False, reveal=False, output_json=False):
+def show_info(svc: Service, do_probe=False, reveal=False, output_json=False, remote_session: str | None = None):
     st = State(svc).load()
     alive = runner_alive(st)
-    ready = bool(alive and st.get("ready"))
+    ready = bool(alive and st.get("ready") and remote_session != "missing")
+    acct = svc.account or st.get("account")
+    drv = svc.drive_account or (st.get("drive_account") if (not svc.account or svc.account == st.get("account")) else None)
     data = dict(service=svc.name, running=alive, ready=ready, url=st.get("url"))
-    lines = [f"service : {svc.name}   (runner {'alive' if alive else 'stopped'})",
-             f"ready   : {ready}"]
+    if acct:
+        data["account"] = acct
+    if drv:
+        data["drive_account"] = drv
+    mode_suffix = ", auto-restart" if st.get("auto_restart") else ""
+    lines = [f"service : {svc.name}   (runner {'alive' if alive else 'stopped'}{mode_suffix})"]
+    if acct:
+        drv_note = f"   (drive: {drv})" if drv and drv != acct else ""
+        lines.append(f"account : {acct}{drv_note}")
+    lines.append(f"ready   : {ready}")
+    if st.get("auto_restart"):
+        data["auto_restart"] = True
+        data["restart_count"] = int(st.get("restart_count") or 0)
+        if st.get("restart_count"):
+            lines.append(f"restarts: {st['restart_count']}")
+    if remote_session == "missing":
+        data["remote_session"] = "missing"
+        lines.append("colab   : session not found")
     if st.get("url"):
         lines.append(f"URL     : {st['url']}")
     if reveal:
@@ -890,19 +1387,25 @@ def show_instances(svc: Service, reveal=False, output_json=False):
     if not items:
         log(f"no instances found for '{svc.base_name or svc.name}'")
         return
-    print(f"{'INSTANCE':<12} {'SESSION':<28} {'STATE':<12} URL" + (" / API TOKEN" if reveal else ""))
+    print(f"{'INSTANCE':<12} {'ACCOUNT':<18} {'SESSION':<28} {'STATE':<12} URL" + (" / API TOKEN" if reveal else ""))
     for item in items:
         label = "READY" if item["ready"] else ("STARTING" if item["alive"] else "STOPPED")
+        acct = item.get("account")
+        drv = item.get("drive_account")
+        acct_col = f"{acct}->{drv}" if (acct and drv and drv != acct) else (acct or drv or "-")
         suffix = f" / {item.get('api_token', '-')}" if reveal else ""
-        print(f"{item['instance']:<12} {item['name']:<28} {label:<12} {item.get('url') or '-'}{suffix}")
+        print(f"{item['instance']:<12} {acct_col:<18} {item['name']:<28} {label:<12} {item.get('url') or '-'}{suffix}")
 
 
 def cmd_down(svc: Service, a) -> None:
     if getattr(a, "all", False):
         items = list_service_instances(svc.base_name or svc.name)
+        target_filter = resolve_effective_account(explicit=svc.account)[0] if svc.account else None
         errors: list[tuple[str, Exception]] = []
         for it in items:
-            sub_svc = dataclasses.replace(svc)
+            if target_filter and it.get("account") and it.get("account") != target_filter:
+                continue
+            sub_svc = dataclasses.replace(svc, account=target_filter, drive_account=None)
             apply_instance(sub_svc, it["instance_arg"] or None)
             sub_a = argparse.Namespace(delete_tunnel=a.delete_tunnel, all=False)
             try:
@@ -917,8 +1420,11 @@ def cmd_down(svc: Service, a) -> None:
     state = State(svc)
     with state.lock("operation", blocking=False):
         st = state.load()
-        log(f"colab stop -s {svc.name}")
-        result = run(["colab", "stop", "-s", svc.name], check=False)
+        acct, _ = resolve_effective_account(explicit=svc.account, saved=st.get("account"), prefer_saved=True)
+        drv = st.get("drive_account") if (not svc.account or acct == st.get("account")) else None
+        target_env = colab_subprocess_env(acct, drv)
+        log(f"colab stop -s {svc.name}" + (f" (account {acct})" if acct else ""))
+        result = run(["colab", "stop", "-s", svc.name], check=False, env=target_env)
         if result.returncode != 0:
             raise CliError(f"Failed to stop {svc.name}; the runtime state was kept, so down can be retried", result.returncode if result.returncode > 0 else 1)
         stop_owned_process(st.get("exec_pid"), st.get("exec_identity"), group=True)
@@ -958,9 +1464,16 @@ def cmd_purge(svc: Service, a) -> None:
         if _owns_tunnel(st) and not (a.delete_tunnel or a.keep_tunnel):
             raise UsageError(f"'{svc.name}' owns the named tunnel {st.get('hostname') or ''}".rstrip()
                              + "; pass --delete-tunnel to remove it or --keep-tunnel to leave it in place")
+        saved_account = st.get("account")
+        if svc.account and saved_account:
+            requested_account, _ = resolve_effective_account(explicit=svc.account)
+            if requested_account != saved_account:
+                raise CliError(f"'{svc.name}' belongs to account {saved_account}; refusing to purge it with account {requested_account}")
+        acct, _ = resolve_effective_account(explicit=saved_account or svc.account)
+        target_env = colab_subprocess_env(acct, st.get("drive_account"))
         # `colab stop` succeeds for unknown sessions, so a non-zero exit means we could not confirm the VM is released.
-        log(f"colab stop -s {svc.name}")
-        result = run(["colab", "stop", "-s", svc.name], check=False)
+        log(f"colab stop -s {svc.name}" + (f" (account {acct})" if acct else ""))
+        result = run(["colab", "stop", "-s", svc.name], check=False, env=target_env)
         if result.returncode != 0:
             raise CliError(f"Could not confirm that the Colab session '{svc.name}' is stopped; local state was kept so purge can be retried",
                            result.returncode if result.returncode > 0 else 1)
@@ -979,8 +1492,14 @@ def build_parser(svc: Service, configure=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False)
     p.add_argument("-i", "--instance", metavar="ID", type=validate_instance,
                    help="instance ID to create/manage multiple parallel instances (e.g. -i 1, -i 2)")
+    p.add_argument("--account", metavar="ACCOUNT", type=validate_account,
+                   help="Colab account name or email (from `colab account list`, or env COLABLLM_ACCOUNT / COLAB_ACCOUNT)")
     sub = p.add_subparsers(dest="cmd", required=True)
     u = sub.add_parser("up", help="session -> Drive -> (cf tunnel) -> run notebook, keep it alive")
+    u.add_argument("-a", "--account", default=argparse.SUPPRESS, metavar="ACCOUNT", type=validate_account,
+                   help="Colab account name or email for this session")
+    u.add_argument("--drive-account", metavar="ACCOUNT", type=validate_account,
+                   help="shared Google Drive storage account to mount")
     tunnel = u.add_mutually_exclusive_group()
     tunnel.add_argument("--domain", nargs="?", const=True, metavar="HOST", type=validate_domain,
                         help="full fixed hostname; without HOST the configured base domain is used, or a dynamic URL if none is configured")
@@ -997,6 +1516,14 @@ def build_parser(svc: Service, configure=None):
     mode = u.add_mutually_exclusive_group()
     mode.add_argument("--foreground", action="store_true", help="stay attached in this terminal instead")
     mode.add_argument("--detach", action="store_true", help="return after starting the runner without waiting for readiness")
+    u.add_argument("--auto-restart", action="store_true",
+                   help="monitor runtime shutdown or disconnection and automatically reconnect or recreate the session")
+    u.add_argument("--restart-delay", type=positive_seconds, metavar="SECONDS",
+                   help="base restart delay in seconds with exponential backoff on repeated failures (default: 3)")
+    u.add_argument("--idle-check", type=positive_seconds, metavar="SECONDS",
+                   help="check the remote session after this many seconds without output (default: 300)")
+    u.add_argument("--max-restarts", type=nonnegative_int, default=0, metavar="N",
+                   help="maximum automatic restarts, or 0 for unlimited after readiness (default: 0)")
     u.add_argument("--ready-timeout", type=positive_seconds, help="seconds to wait for readiness (default: service-specific)")
     u.add_argument("--dry-run", action="store_true", help="only show the cell plan")
     d = sub.add_parser("down", help="stop runner + Colab session")
@@ -1032,12 +1559,19 @@ def build_parser(svc: Service, configure=None):
 
 def main(svc: Service, *, configure=None, handlers=None, prepare_up=None) -> None:
     script = Path(sys.argv[0]).resolve()
-    inst, cleaned_argv = extract_instance_arg(sys.argv[1:])
+    inst, argv_after_inst = extract_instance_arg(sys.argv[1:])
+    acct, cleaned_argv = extract_account_arg(argv_after_inst)
     apply_instance(svc, inst)
+    svc.account = acct
+    svc.drive_account = None
     p = build_parser(svc, configure)
     a = p.parse_args(cleaned_argv)
     if getattr(a, "instance", None):
         apply_instance(svc, a.instance)
+    if getattr(a, "account", None):
+        svc.account = a.account
+    if getattr(a, "drive_account", None):
+        svc.drive_account = a.drive_account
     if handlers and a.cmd in handlers:
         code = handlers[a.cmd](a)
         if isinstance(code, int) and code:
@@ -1067,10 +1601,24 @@ def main(svc: Service, *, configure=None, handlers=None, prepare_up=None) -> Non
     elif a.cmd in ("ps", "list"):
         show_instances(svc, reveal=a.show_secrets, output_json=a.json)
     elif a.cmd == "status":
-        result = run(["colab", "status", "-s", svc.name], capture=True, check=False)
+        st_curr = State(svc).load()
+        explicit_acct = svc.account
+        resolved_acct, _ = resolve_effective_account(
+            explicit=explicit_acct,
+            saved=st_curr.get("account"),
+            prefer_saved=True,
+        )
+        svc.account = resolved_acct
+        svc.drive_account = (
+            st_curr.get("drive_account")
+            if (not explicit_acct or resolved_acct == st_curr.get("account"))
+            else None
+        )
+        result = run(["colab", "status", "-s", svc.name], capture=True, check=False, env=colab_env_for(svc))
         if result.returncode != 0:
             raise CliError((result.stderr or "Colab status query failed").strip(), result.returncode if result.returncode > 0 else 1)
-        if not show_info(svc, do_probe=True, reveal=a.show_secrets, output_json=a.json):
+        remote_state = parse_colab_session_status(svc.name, result.returncode, result.stdout or "", result.stderr or "")
+        if not show_info(svc, do_probe=True, reveal=a.show_secrets, output_json=a.json, remote_session=remote_state):
             raise SystemExit(1)
     elif a.cmd == "logs":
         lp = State(svc).log_path

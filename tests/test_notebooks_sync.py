@@ -200,6 +200,16 @@ class MiddlewareImportTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             qwen_img._prepare_generation_request(bad_save)
 
+    def test_minimax_h3_image_middleware_rejects_traversal_and_non_drive_urls(self):
+        h3_mw = importlib.import_module("minimax_h3_image_middleware")
+        store = h3_mw.MiniMaxH3JobStore()
+        with self.assertRaises(ValueError):
+            store.prepare_canonical_job({"prompt": "hi", "task": "edit", "images": ["file:///etc/passwd"]})
+        with self.assertRaises(ValueError):
+            store.prepare_canonical_job({"prompt": "hi", "save_to_drive": "../../escape.png"})
+        with self.assertRaises(ValueError):
+            store.prepare_canonical_job({"prompt": "hi", "negative_prompt": "blurry"})
+
     def test_deepseek_coder_notebook_embeds_runtime_and_loopback_auth(self):
         ds_rt = importlib.import_module("deepseek_coder_runtime")
         plan = ds_rt.plan_hardware_config(vram_mib=97_887, ram_mib=180_224)

@@ -256,9 +256,9 @@
             <div class="card-body">${gpuRows.length ? `<div class="bars">${gpuRows.map(([g, n]) => `<div class="bar-row"><span class="tag">${esc(g)}</span><div class="bar-track"><div class="bar-fill" data-w="${(n / gpuMax) * 100}"></div></div><span class="bar-val">${n} running</span></div>`).join('')}</div>` : '<div class="muted">No accelerators allocated.</div>'}</div>
           </section>
           <section class="card">
-            <div class="card-head"><div><h3>Environment</h3><p>Tunnel and storage configuration</p></div><a class="btn btn-sm btn-ghost" href="#/diagnostics">Diagnostics${icon('chevron', 'i-sm')}</a></div>
+            <div class="card-head"><div><h3>Environment</h3><p>Tunnel and storage configuration</p></div></div>
             <div class="card-body"><dl class="kv">
-              <dt>Transport</dt><dd><span class="tag plain">${icon('globe')}${esc(d.environment.transport)}</span></dd>
+              <dt>Transport</dt><dd><span class="tag plain">${icon('globe')}${esc(d.environment.transport)}</span><button class="icon-btn sm" data-action="cloudflare-settings" title="Edit Cloudflare settings" aria-label="Edit Cloudflare settings">${icon('edit')}</button></dd>
               <dt>Base domain</dt><dd>${d.environment.base_domain ? `<code>${esc(d.environment.base_domain)}</code>` : '<span class="muted">Dynamic trycloudflare URLs</span>'}</dd>
               ${d.environment.frp_server ? `<dt>FRP server</dt><dd><code>${esc(d.environment.frp_server)}</code></dd>` : ''}
               <dt>State directory</dt><dd><code>${esc(d.environment.home)}</code></dd>
@@ -347,7 +347,7 @@
         : `<div class="banner bad">${icon('alert')}<div><strong>${failed} required check${failed === 1 ? '' : 's'} failing</strong><p>Deployments will likely fail until these are resolved.</p></div></div>`) : ''}
       <section class="card"><div class="card-head"><div><h3>Health checks</h3><p>Never opens a browser, creates a session or mounts Drive</p></div></div>${body}</section>
       <section class="card"><div class="card-head"><div><h3>Configuration</h3></div></div><div class="card-body"><dl class="kv">
-        <dt>Transport</dt><dd>${esc(d.environment.transport)}</dd>
+        <dt>Transport</dt><dd>${esc(d.environment.transport)}<button class="icon-btn sm" data-action="cloudflare-settings" title="Edit Cloudflare settings" aria-label="Edit Cloudflare settings">${icon('edit')}</button></dd>
         <dt>Base domain</dt><dd>${esc(d.environment.base_domain || '—')}</dd>
         <dt>State directory</dt><dd><code>${esc(d.environment.home)}</code></dd>
         <dt>Version</dt><dd>colabllm ${esc(d.environment.version)} · Python ${esc(d.environment.python)}</dd>
@@ -389,6 +389,119 @@
     setTimeout(() => { const f = m.querySelector('input:not([type=checkbox]), select, .btn-primary, .btn-danger'); f && f.focus(); }, 60);
   }
   function closeModal() { const m = $('#modal'); m.classList.remove('open'); m.setAttribute('aria-hidden', 'true'); }
+
+  function cloudflareModal() {
+    const env = S.data.environment;
+    openModal('Cloudflare connection', `
+      <div class="field"><span class="field-label">Cloudflare CLI</span>
+        <div id="cf-status" class="note">${icon('refresh', 'spin')}<span>Checking connection...</span></div>
+        <div class="page-actions"><button class="btn btn-sm" id="cf-login" disabled hidden>${icon('key')}Sign in</button><button class="btn btn-sm" id="cf-logout" disabled hidden>${icon('trash')}Sign out</button><button class="btn btn-sm" id="cf-check" hidden>${icon('refresh')}Refresh</button></div>
+      </div>
+      <div class="stack" id="cf-settings" hidden>
+      <div class="field"><label for="cf-zone">Cloudflare zones</label><select class="select" id="cf-zone" disabled><option value="">Loading zones...</option></select><small id="cf-zone-message"></small></div>
+      <div class="field"><label for="cf-domain">Base domain</label><input class="input" id="cf-domain" value="${esc(env.saved_base_domain || '')}" placeholder="example.com" autocomplete="off" spellcheck="false">
+        <small>Select a zone or enter a custom domain. Leave empty for a temporary Quick Tunnel URL.</small></div>
+      ${env.domain_override ? `<div class="note">${icon('alert')}<span><code>COLABSVC_BASE_DOMAIN</code> overrides this setting: <code>${esc(env.domain_override)}</code>.</span></div>` : ''}
+      ${env.transport === 'frp' ? `<div class="note">${icon('alert')}<span>FRP is enabled and remains the default transport. Disable FRP before clearing its required domain.</span></div>` : ''}
+      <div class="note">${icon('clock')}<span>Changes apply to future starts; running services are not moved.</span></div></div>`,
+      `<button class="btn" data-close="modal">Cancel</button><button class="btn btn-primary" id="cf-save" hidden>Save settings</button>`);
+
+    let zonesLoaded = false, zonesVersion = 0;
+    const clearZones = (message) => {
+      const select = $('#cf-zone'), hint = $('#cf-zone-message');
+      if (!select || !hint) return;
+      select.innerHTML = '<option value="">Zones unavailable</option>';
+      select.disabled = true;
+      hint.textContent = message;
+    };
+    const loadZones = async () => {
+      const version = ++zonesVersion;
+      zonesLoaded = true;
+      try {
+        const result = await api('/api/cloudflare/zones');
+        const select = $('#cf-zone'), hint = $('#cf-zone-message'), domain = $('#cf-domain');
+        if (!select || !hint || !domain || version !== zonesVersion) return;
+        select.innerHTML = `<option value="">Select a zone</option><option value="__quick__">Quick Tunnel (no domain)</option><option value="__custom__">Custom domain</option>${result.zones.map((zone) => `<option value="${esc(zone.name)}">${esc(zone.name)}${zone.status !== 'active' ? ` (${esc(zone.status)})` : ''}</option>`).join('')}`;
+        select.value = result.zones.some((zone) => zone.name === domain.value) ? domain.value : (domain.value ? '__custom__' : '__quick__');
+        select.disabled = false;
+        hint.textContent = result.zones.length ? `${result.zones.length} accessible zone${result.zones.length === 1 ? '' : 's'}` : 'No zones found in this Cloudflare account.';
+      } catch (err) {
+        if (version === zonesVersion) clearZones(err.message);
+      }
+    };
+    const updateStatus = async (refreshZones = false) => {
+      try {
+        const status = await api('/api/cloudflare');
+        const label = $('#cf-status'), login = $('#cf-login'), logout = $('#cf-logout');
+        if (!label || !login || !logout) return;
+        if (!status.installed) {
+          label.innerHTML = `${icon('alert')}<span>Cloudflare CLI not found. Install with <code>npm install --global cf</code>, then restart the panel.</span>`;
+        } else if (status.login === 'running') {
+          label.innerHTML = `${icon('refresh', 'spin')}<span>Complete sign-in in the browser opened on this machine.</span>`;
+          setTimeout(() => updateStatus(), 2000);
+        } else if (status.login === 'logging_out') {
+          label.innerHTML = `${icon('refresh', 'spin')}<span>Signing out...</span>`;
+        } else if (status.authorized) {
+          label.innerHTML = `${icon('check')}<span>Cloudflare CLI is signed in. DNS zone access is checked when starting a named tunnel.</span>`;
+        } else {
+          label.innerHTML = `${icon('alert')}<span>${status.login === 'failed' ? 'Sign-in failed or expired. Run ' : 'Not signed in. If browser sign-in fails, run '}<code>cf auth login</code> in a terminal.</span>`;
+        }
+        const busy = status.login === 'running' || status.login === 'logging_out';
+        login.hidden = status.authorized;
+        logout.hidden = !status.authorized;
+        $('#cf-check').hidden = !status.authorized;
+        $('#cf-settings').hidden = !status.authorized || busy;
+        $('#cf-save').hidden = !status.authorized || busy;
+        login.disabled = !status.installed || busy;
+        logout.disabled = !status.installed || busy;
+        if (status.authorized && !busy && (refreshZones || !zonesLoaded)) loadZones();
+        else if (!status.authorized && !busy) { zonesLoaded = false; zonesVersion++; clearZones('Sign in to list Cloudflare zones.'); }
+      } catch (err) {
+        const label = $('#cf-status');
+        if (label) label.textContent = err.message;
+      }
+    };
+    $('#cf-check').onclick = () => updateStatus(true);
+    $('#cf-zone').onchange = (e) => {
+      const value = e.target.value;
+      if (value === '__quick__') $('#cf-domain').value = '';
+      else if (value === '__custom__') $('#cf-domain').focus();
+      else if (value) $('#cf-domain').value = value;
+    };
+    $('#cf-domain').oninput = (e) => {
+      const select = $('#cf-zone');
+      if (!select.disabled) select.value = [...select.options].some((option) => option.value === e.target.value && option.value) ? e.target.value : (e.target.value ? '__custom__' : '__quick__');
+    };
+    $('#cf-login').onclick = async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try { await api('/api/cloudflare/login', { method: 'POST', body: {} }); await updateStatus(); }
+      catch (err) { btn.disabled = false; toast('bad', 'Cloudflare sign-in failed', err.message, 7000); }
+    };
+    $('#cf-logout').onclick = async (e) => {
+      if (!confirm('Sign out of the default Cloudflare CLI profile? Existing tunnels and DNS records are not deleted.')) return;
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      zonesVersion++; zonesLoaded = false;
+      try {
+        const status = await api('/api/cloudflare/logout', { method: 'POST', body: {} });
+        if (status.authorized) toast('info', 'Default profile signed out', 'Another profile or environment token is still active', 7000);
+        else toast('ok', 'Cloudflare signed out');
+        await updateStatus(true);
+      } catch (err) { btn.disabled = false; toast('bad', 'Cloudflare sign-out failed', err.message, 7000); }
+    };
+    $('#cf-save').onclick = async (e) => {
+      const btn = e.currentTarget;
+      btn.disabled = true;
+      try {
+        await api('/api/tunnel-config', { method: 'POST', body: { base_domain: $('#cf-domain').value } });
+        closeModal();
+        toast('ok', 'Tunnel settings saved', 'Applies to future starts');
+        await refresh();
+      } catch (err) { btn.disabled = false; toast('bad', 'Settings not saved', err.message, 7000); }
+    };
+    updateStatus();
+  }
 
   // Shell-style preview of one argv element (display only; the server never uses a shell).
   const shq = (v) => /^[\w@%+=:,./-]+$/.test(v) ? v : `'${String(v).replace(/'/g, `'\\''`)}'`;
@@ -811,6 +924,7 @@
     else if (action === 'cat-filter') { S.catFilter = el.dataset.value; renderPage(); }
     else if (action === 'doctor') runDoctor(false);
     else if (action === 'doctor-online') runDoctor(true);
+    else if (action === 'cloudflare-settings') cloudflareModal();
     else if (action === 'health') {
       el.disabled = true; el.classList.add('spin');
       try {

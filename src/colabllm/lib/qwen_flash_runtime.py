@@ -410,6 +410,32 @@ def looks_like_oom(log_tail: str) -> bool:
     return any(pat in lower for pat in _OOM_PATTERNS)
 
 
+def classify_health_response(status_code: int, payload: Any) -> tuple[str, str]:
+    """Classify llama-server `/health` status/body into `(state, detail)`."""
+    detail = ""
+    if isinstance(payload, dict):
+        err_obj = payload.get("error")
+        if isinstance(err_obj, dict):
+            detail = str(err_obj.get("message") or "").strip()
+        elif isinstance(err_obj, str):
+            detail = err_obj.strip()
+        else:
+            detail = str(payload.get("status") or payload.get("message") or "").strip()
+
+    if status_code == 200:
+        return "ready", detail or "ok"
+    lower_detail = detail.lower()
+    if status_code >= 500 and any(
+        marker in lower_detail for marker in ("error loading model", "failed to load", "load failed")
+    ):
+        return "error", detail
+    if status_code == 503:
+        return "loading", detail or "Loading model"
+    if status_code in (401, 403):
+        return "auth_error", detail or f"HTTP {status_code}"
+    return "pending", detail or f"HTTP {status_code}"
+
+
 def write_json_atomic(path: Path, value: Any) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -427,7 +453,7 @@ def digest_file(path: Path) -> str:
 
 
 def evict_gguf_page_cache(model_dir: Path, log: Callable[[str], None] | None = None) -> int:
-    """Advise Linux kernel (`POSIX_FADV_DONTNEED`) to drop GGUF file page cache before `--load-mode none`."""
+    """Advise Linux kernel (`POSIX_FADV_DONTNEED`) to drop GGUF file page cache after host-RAM load."""
     fadvise = getattr(os, "posix_fadvise", None)
     dontneed = getattr(os, "POSIX_FADV_DONTNEED", None)
     if fadvise is None or dontneed is None or not Path(model_dir).is_dir():
@@ -447,7 +473,7 @@ def evict_gguf_page_cache(model_dir: Path, log: Callable[[str], None] | None = N
         except OSError:
             continue
     if log is not None and evicted > 0:
-        log(f"Released GGUF OS page cache hint across {evicted / (1024**3):.1f} GiB before host-RAM load")
+        log(f"Released GGUF OS page cache hint across {evicted / (1024**3):.1f} GiB after host-RAM load")
     return evicted
 
 

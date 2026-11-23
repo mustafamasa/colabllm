@@ -5,12 +5,13 @@ import re
 import runpy
 
 from cli_support import UsageError
+from colab_accounts import list_account_names
 from colabsvc import build_parser
 from paths import user_home
 
 ROOT = Path(__file__).resolve().parents[1]
 GLOBAL = ('services', 'help', 'doctor', 'completion', 'skill', 'ui', 'tunnel-config', 'frp-config', 'frp-status')
-FLAGS = ('--help', '--version', '--debug', '--quiet', '--no-color', '--command-timeout')
+FLAGS = ('--help', '--version', '--account', '--debug', '--quiet', '--no-color', '--command-timeout')
 
 
 def service_scripts():
@@ -68,7 +69,14 @@ def candidates(words):
             if not done:
                 return []
             done.pop(0)
+        elif flag == '--account':
+            if not done:
+                return [value for value in list_account_names() if value.startswith(prefix)]
+            done.pop(0)
     if not done:
+        if prefix.startswith('--account='):
+            val_prefix = prefix.split('=', 1)[1]
+            return ['--account=' + value for value in list_account_names() if value.startswith(val_prefix)]
         return sorted(value for value in (*scripts, *GLOBAL, *FLAGS) if value.startswith(prefix))
     service, *done = done
     if service == 'completion':
@@ -114,6 +122,8 @@ def candidates(words):
     if expected is not None and not (expected.nargs == '?' and prefix.startswith('-') and not flag_prefix):
         if expected.dest == 'instance':
             values = instance_ids(service)
+        elif expected.dest in ('account', 'drive_account'):
+            values = list_account_names()
         else:
             values = list(expected.choices or ())
         return [flag_prefix + str(value) for value in values if str(value).startswith(prefix)]

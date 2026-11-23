@@ -109,6 +109,7 @@ def check(artifact):
             'nemotron-transcribe': ('transcribe', 'download', 'ls-drive'),
             'flux-klein': ('generate', 'edit', 'upsample', 'ls-drive', 'models'),
             'qwen-image': ('generate', 'edit', 'ls-drive', 'models'),
+            'minimax-h3-image': ('generate', 'edit', 'job', 'download', 'ls-drive', 'models'),
             'qwen-flash': ('models', 'plan'),
             'deepseek-coder': ('models', 'plan'),
             'deepseek-qwen-9b': ('models', 'plan'),
