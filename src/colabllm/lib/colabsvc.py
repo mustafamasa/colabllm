@@ -48,7 +48,7 @@ import urllib.request
 from pathlib import Path
 
 from paths import private_dir, user_home
-from cli_support import CliError, UsageError, command_timeout, positive_seconds, diagnostic, safe_urlopen
+from cli_support import CliError, UsageError, command_timeout, nonnegative_seconds, positive_seconds, diagnostic, safe_urlopen
 from colab_accounts import (
     account_sessions_path,
     colab_subprocess_env,
@@ -631,6 +631,7 @@ DEFAULT_FAST_PROBE_TIMEOUT = 5.0
 DEFAULT_IDLE_CHECK_SECONDS = 300.0
 DEFAULT_SILENT_RECHECK_SECONDS = 60.0
 DEFAULT_MAX_STARTUP_RETRIES = 3
+DEFAULT_GPU_RETRY_INTERVAL = 15.0
 
 
 def nonnegative_int(value: str) -> int:
@@ -820,7 +821,8 @@ def _provision_session_for_restart(
 ) -> str:
     """Verify remote session state under `.operation.lock` and reconnect or recreate the Colab VM.
 
-    Returns `'reattached_ready'` (live VM + live HTTP endpoint), `'ready'`, `'stopped'`, or `'failed'`.
+    Returns `'reattached_ready'` (live VM + live HTTP endpoint), `'ready'`, `'stopped'`,
+    `'accelerator_unavailable'` (Colab refused the GPU/TPU allocation), or `'failed'`.
     """
     with state.lock("operation", blocking=True):
         owned, st = _runner_still_owned(state, pid, identity)
@@ -859,11 +861,16 @@ def _provision_session_for_restart(
                     return "ready"
             log(f"[auto-restart] Remote session '{target_svc.name}' has stopped; cleaning up and recreating the instance")
             run(["colab", "stop", "-s", target_svc.name], capture=True, check=False, env=target_env)
-            ensure_session(target_svc, force_new=True)
+            saved_gpu_retry = st.get("gpu_retry_interval")
+            ensure_session(target_svc, force_new=True,
+                           single_assign=saved_gpu_retry is None or float(saved_gpu_retry) > 0)
             if mount_drive:
                 log("colab dfs mount")
                 run(["colab", "dfs", "mount", "-s", target_svc.name], env=target_env)
             return "ready"
+        except AcceleratorUnavailableError as err:
+            warn(f"[auto-restart] {err}")
+            return "accelerator_unavailable"
         except (CliError, OSError, subprocess.SubprocessError) as err:
             warn(f"[auto-restart] Session recovery failed: {err}")
             return "failed"
@@ -912,6 +919,9 @@ def exec_runner(svc: Service, nb_path: Path) -> int:
         max_startup_retries = max(1, int(os.environ.get("COLABLLM_MAX_STARTUP_RETRIES", DEFAULT_MAX_STARTUP_RETRIES)))
     except ValueError:
         max_startup_retries = DEFAULT_MAX_STARTUP_RETRIES
+    saved_gpu_retry = st.get("gpu_retry_interval")
+    gpu_retry_interval = DEFAULT_GPU_RETRY_INTERVAL if saved_gpu_retry is None else float(saved_gpu_retry)
+    gpu_wait_timeout = float(st.get("gpu_wait_timeout") or 0)
 
     old_handler = signal.getsignal(signal.SIGTERM)
     def terminated(signum, frame):
@@ -1010,6 +1020,7 @@ def exec_runner(svc: Service, nb_path: Path) -> int:
                 log(f"[auto-restart #{restart_count}] Remote session confirmed stopped; restoring immediately")
 
             reattached_ready = False
+            accelerator_wait_started = None
             while True:
                 status_result = _provision_session_for_restart(
                     svc, state, pid, identity, previous_url=previous_url
@@ -1020,6 +1031,17 @@ def exec_runner(svc: Service, nb_path: Path) -> int:
                 if status_result in ("ready", "reattached_ready"):
                     reattached_ready = status_result == "reattached_ready"
                     break
+                if status_result == "accelerator_unavailable" and gpu_retry_interval > 0:
+                    now = time.monotonic()
+                    if accelerator_wait_started is None:
+                        accelerator_wait_started = now
+                    waited = now - accelerator_wait_started
+                    if not gpu_wait_timeout or waited + gpu_retry_interval <= gpu_wait_timeout:
+                        # Capacity refusals are not startup failures: keep polling without exhausting retries.
+                        warn(f"[auto-restart #{restart_count}] Waiting for an accelerator; retrying session "
+                             f"recreation in {gpu_retry_interval:g}s (waited {waited:.0f}s)")
+                        time.sleep(gpu_retry_interval)
+                        continue
                 consecutive_failures += 1
                 if not ever_ready and consecutive_failures >= max_startup_retries:
                     warn(f"[auto-restart] Initial startup failed {consecutive_failures} times; stopping retries")
@@ -1040,7 +1062,78 @@ def exec_runner(svc: Service, nb_path: Path) -> int:
 
 
 # --------------------------------------------------------------------------- commands
-def ensure_session(svc: Service, *, force_new: bool = False) -> bool:
+class AcceleratorUnavailableError(CliError):
+    """`colab new` was refused because the requested GPU/TPU cannot be allocated right now."""
+
+
+# `colab new` exits 1 for every failure, so allocation refusals are recognised by the colab CLI's
+# messages: 412 capacity/usage refusal, 400 accelerator rejection, or 5xx on the assign request
+# (Colab answers 503 when no machine of the requested type is free).
+_ACCELERATOR_REFUSALS = (
+    (re.compile(r"Allocation\s*refused"), "allocation refused (HTTP 412: no free capacity, usage limit or too many sessions)"),
+    (re.compile(r"Backend\s*rejected\s*accelerator"), "accelerator rejected (HTTP 400: no quota/entitlement or temporarily unavailable)"),
+    (re.compile(r"Failed\s*to\s*issue\s*request\s*POST\s*\S*/assign\S*:\s*"
+                r"(Service\s*Unavailable|Bad\s*Gateway|Gateway\s*Timeout)"),
+     "no free machine (Colab assign returned {0})"),
+)
+
+
+def accelerator_refusal(output: str) -> str | None:
+    """Return a short reason when `colab new` output is an accelerator allocation refusal."""
+    # The colab CLI renders errors with rich, which hard-wraps long lines (including the
+    # assign URL) at the console width; rejoin them before matching.
+    joined = "".join(output.splitlines())
+    for pattern, reason in _ACCELERATOR_REFUSALS:
+        match = pattern.search(joined)
+        if match:
+            return reason.format(*match.groups())
+    return None
+
+
+def _colab_new(svc: Service, env, *, assign_retries: int | None = None) -> None:
+    args = ["colab", "new", "-s", svc.name]
+    if svc.tpu:
+        args += ["--tpu", svc.tpu]
+    elif svc.gpu:
+        args += ["--gpu", svc.gpu]
+    if svc.high_mem:
+        args += ["--high-mem"]
+    if assign_retries is not None and "COLAB_CLI_ASSIGN_RETRIES" not in (env if env is not None else os.environ):
+        # The caller owns the retry cadence: one assign request per `colab new` keeps every attempt
+        # short (the CLI's own 10/20/40s backoff can approach the external command timeout).
+        env = {**(env if env is not None else os.environ), "COLAB_CLI_ASSIGN_RETRIES": str(assign_retries)}
+    log(" ".join(args))
+    res = run(args, capture=True, check=False, env=env)
+    stdout, stderr = res.stdout or "", res.stderr or ""
+    if res.returncode == 0:
+        sys.stdout.write(stdout)
+        sys.stdout.flush()
+        sys.stderr.write(stderr)
+        return
+    code = res.returncode if res.returncode > 0 else 1
+    accelerator = svc.tpu or svc.gpu
+    output = stdout + stderr
+    reason = accelerator_refusal(output) if accelerator else None
+    if reason:
+        raise AcceleratorUnavailableError(f"{accelerator} could not be allocated: {reason}", code)
+    sys.stderr.write(output)
+    raise CliError(f"Command failed ({res.returncode}): {' '.join(args[:4])}", code)
+
+
+def ensure_session(
+    svc: Service,
+    *,
+    force_new: bool = False,
+    retry_interval: float = 0.0,
+    wait_timeout: float = 0.0,
+    single_assign: bool = False,
+) -> bool:
+    """Reuse or create the Colab session; returns True when an existing session was reused.
+
+    With `retry_interval > 0`, accelerator allocation refusals are retried every `retry_interval`
+    seconds until a VM is assigned or `wait_timeout` seconds elapse (0 waits indefinitely).
+    `single_assign` limits each `colab new` to one assign request so the caller sets the cadence.
+    """
     env = colab_env_for(svc)
     if not force_new:
         try:
@@ -1053,16 +1146,31 @@ def ensure_session(svc: Service, *, force_new: bool = False) -> bool:
                 return True
             log(f"stale Colab session '{svc.name}' was reclaimed remotely; recreating")
             run(["colab", "stop", "-s", svc.name], capture=True, check=False, env=env)
-    args = ["colab", "new", "-s", svc.name]
-    if svc.tpu:
-        args += ["--tpu", svc.tpu]
-    elif svc.gpu:
-        args += ["--gpu", svc.gpu]
-    if svc.high_mem:
-        args += ["--high-mem"]
-    log(" ".join(args))
-    run(args, env=env)
-    return False
+    started = time.monotonic()
+    attempt = 1
+    while True:
+        try:
+            _colab_new(svc, env, assign_retries=0 if single_assign else None)
+        except AcceleratorUnavailableError as err:
+            waited = time.monotonic() - started
+            if retry_interval <= 0:
+                raise
+            if wait_timeout and waited + retry_interval > wait_timeout:
+                raise AcceleratorUnavailableError(
+                    f"{err} (gave up after {attempt} attempts in {waited:.0f}s)", err.code
+                ) from None
+            if attempt == 1:
+                warn(f"{err}")
+                limit = f"for up to {wait_timeout:g}s" if wait_timeout else "until one is available"
+                warn(f"retrying every {retry_interval:g}s {limit} (Ctrl-C to cancel, --gpu-retry-interval 0 to disable)")
+            else:
+                warn(f"{err} [attempt {attempt}, waited {waited:.0f}s]; retrying in {retry_interval:g}s")
+            time.sleep(retry_interval)
+            attempt += 1
+            continue
+        if attempt > 1:
+            log(f"{svc.tpu or svc.gpu} allocated after {attempt} attempts ({time.monotonic() - started:.0f}s)")
+        return False
 
 
 def cmd_up(svc: Service, script: Path, a) -> None:
@@ -1090,6 +1198,10 @@ def _start_up(svc: Service, script: Path, a):
     max_restarts = int(getattr(a, "max_restarts", 0) or 0)
     if (restart_delay is not None or idle_check is not None or max_restarts > 0) and not auto_restart:
         raise ValueError("--restart-delay, --idle-check and --max-restarts require --auto-restart")
+    gpu_retry_interval = float(getattr(a, "gpu_retry_interval", DEFAULT_GPU_RETRY_INTERVAL))
+    gpu_wait_timeout = float(getattr(a, "gpu_wait_timeout", 0.0) or 0.0)
+    if gpu_wait_timeout and not gpu_retry_interval:
+        raise ValueError("--gpu-wait-timeout requires a non-zero --gpu-retry-interval")
     explicit_drive = getattr(a, "drive_account", None)
     if explicit_drive and a.no_drive:
         raise ValueError("--drive-account cannot be used with --no-drive")
@@ -1213,7 +1325,10 @@ def _start_up(svc: Service, script: Path, a):
     _write_private_notebook(nb_path, built, env)
     # 2. session + 3. Drive
     previous_url = st.get("url")
-    reused_session = ensure_session(svc) is True
+    reused_session = ensure_session(
+        svc, retry_interval=gpu_retry_interval, wait_timeout=gpu_wait_timeout,
+        single_assign=gpu_retry_interval > 0,
+    ) is True
     if not a.no_drive:
         drv_note = f" (drive {svc.drive_account})" if svc.drive_account and svc.drive_account != svc.account else ""
         log(f"colab dfs mount{drv_note}")
@@ -1243,6 +1358,8 @@ def _start_up(svc: Service, script: Path, a):
         max_restarts=max_restarts,
         restart_count=0,
         last_restart=None,
+        gpu_retry_interval=gpu_retry_interval,
+        gpu_wait_timeout=gpu_wait_timeout,
     )
 
     # 4. notebook through an attached `colab exec` (keep-alive)
@@ -1508,6 +1625,11 @@ def build_parser(svc: Service, configure=None):
     tunnel.add_argument("--quick-tunnel", action="store_true", help="ignore the base domain configuration and force a dynamic trycloudflare.com URL")
     u.add_argument('--transport',choices=('cloudflare','frp'),help='override the global tunnel backend for this start')
     u.add_argument("--gpu", help="override GPU (T4|L4|G4|H100|A100|none)")
+    u.add_argument("--gpu-retry-interval", type=nonnegative_seconds, default=DEFAULT_GPU_RETRY_INTERVAL, metavar="SECONDS",
+                   help="when Colab has no free GPU/TPU of the requested type, retry session creation every SECONDS "
+                        "(also during --auto-restart); 0 fails immediately (default: 15)")
+    u.add_argument("--gpu-wait-timeout", type=nonnegative_seconds, default=0.0, metavar="SECONDS",
+                   help="stop waiting for a free GPU/TPU after SECONDS, or 0 to wait indefinitely (default: 0)")
     u.add_argument("--skip", default="", help="1-based code cells to skip, e.g. 1,2")
     u.add_argument("--no-drive", action="store_true", help="do not mount Google Drive")
     u.add_argument("--hf-token", metavar="TOKEN",

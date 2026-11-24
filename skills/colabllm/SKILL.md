@@ -87,6 +87,10 @@ disconnects (checked after `3s` by default) or the `10s` edge HTTP probe / `300s
 detects a reclaimed VM (`colab status` reports `not found`), it re-attaches live VMs (preserving
 `ready` when the authenticated endpoint responds) or immediately recreates and re-mounts reclaimed
 VMs while preserving fixed domains and `api_token`; `down` stops it cleanly.
+When Colab refuses the requested accelerator (capacity/usage refusal or accelerator rejected), `up`
+and the auto-restart supervisor retry session creation every `15s` until it is allocated
+(`--gpu-retry-interval SECONDS`, `0` disables; `--gpu-wait-timeout SECONDS`, `0` unlimited), so a
+waiting `up` blocks rather than failing; other `colab new` errors fail immediately.
 A reachable domain or 502 during loading is not model readiness.
 Use `up --ready-timeout SECONDS` for a suitable startup wait and `--command-timeout SECONDS` for
 external command limits. Exit 124 means timeout; default startup timeout leaves the runner active.

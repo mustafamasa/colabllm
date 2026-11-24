@@ -48,6 +48,12 @@ if cmd == 'status':
         print("[ollama-test] gpu-t4-s-fake | Hardware: T4 | Status: BUSY", flush=True)
     sys.exit(0)
 if cmd == 'new':
+    refusals = root / 'refuse-alloc'
+    if refusals.exists() and int(refusals.read_text() or 0) > 0:
+        refusals.write_text(str(int(refusals.read_text()) - 1))
+        print('[colab] Allocation refused (precondition failed). This can mean too many active sessions, '
+              'or a temporary usage or capacity limit for the requested runtime.', file=sys.stderr)
+        sys.exit(1)
     if (root / 'fail-new-once').exists():
         (root / 'fail-new-once').unlink()
         print('GPU capacity temporarily unavailable', file=sys.stderr)
@@ -239,6 +245,29 @@ if cmd == 'stop' and (root / 'fail-stop').exists():
         self.assertEqual(stop.returncode, 0, stop.stderr)
         self.assertFalse(owned_process(st['runner_pid'], st['runner_identity']))
         self.assertFalse(owned_process(st['exec_pid'], st['exec_identity']))
+
+    def test_up_and_auto_restart_wait_for_refused_accelerator(self):
+        self.env['COLABLLM_IDLE_CHECK_SECONDS'] = '0.12'
+        (self.root / 'refuse-alloc').write_text('2')
+        start = self.cli(
+            'up', '--quick-tunnel', '--no-drive', '--gpu', 'G4', '--auto-restart', '--restart-delay', '.05',
+            '--gpu-retry-interval', '.05', '--detach',
+        )
+        self.assertEqual(start.returncode, 0, start.stderr)
+        self.assertIn('G4 could not be allocated: allocation refused (HTTP 412', start.stderr)
+        self.assertIn('G4 allocated after 3 attempts', start.stderr)
+        self.assertEqual(self.wait_ready()['gpu_retry_interval'], 0.05)
+        # The VM is reclaimed and Colab keeps refusing the accelerator while the supervisor recreates it.
+        (self.root / 'refuse-alloc').write_text('3')
+        (self.root / 'session-missing').touch()
+        self.wait_restart_ready(min_restarts=1)
+        self.assertEqual((self.root / 'refuse-alloc').read_text(), '0')
+        log = (self.state_path.parent / 'run.log').read_text()
+        self.assertEqual(log.count('Waiting for an accelerator'), 3, log)
+        new_calls = [c for c in self.colab_calls() if c[:1] == ['new']]
+        self.assertEqual(len(new_calls), 7, new_calls)
+        self.assertTrue(all('G4' in c for c in new_calls), new_calls)
+        self.assertEqual(self.cli('down').returncode, 0)
 
     def test_auto_restart_reuses_live_vm_on_transient_exec_disconnect(self):
         (self.root / 'crash-once-after-ready').touch()

@@ -104,6 +104,12 @@ skipping `ready_timeout` when the authenticated endpoint is already serving HTTP
 reclaimed VMs with saved `session_gpu`/`mount_drive` (default `3s` restart delay), and breaks
 half-open silent sockets within `~10s` via a two-stage edge HTTP probe + `colab status` confirmation
 (plus a 300s `--idle-check` backstop) while capping pre-`CT_READY` startup retries with backoff.
+`colab new` output is captured and classified (`accelerator_refusal`, which rejoins rich's hard-wrapped
+lines): only allocation refusals (`Allocation refused` 412, `Backend rejected accelerator` 400, 5xx on
+`/assign` — Colab returns 503 when no G4 is free) raise `AcceleratorUnavailableError` and are retried every
+`--gpu-retry-interval` (default `15s`, `0` fails fast; `--gpu-wait-timeout` caps it) with one assign
+request per attempt (`COLAB_CLI_ASSIGN_RETRIES=0`). The
+supervisor retries those outside `.operation.lock` without counting startup failures, so `down` still works.
 `info/ps/status --json` default to redacted output; credentials require `--show-secrets`.
 
 Readiness is parsed incrementally as complete protocol lines; preserve the exact `CT_READY` line

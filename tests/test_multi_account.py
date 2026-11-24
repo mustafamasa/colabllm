@@ -130,7 +130,7 @@ class MultiAccountResolverTest(unittest.TestCase):
         # Different account has no session recorded -> calls `colab new` with COLAB_ACCOUNT=gpu1
         service_other = svc.Service(name="test", notebook="test.ipynb", service_port=8000, account="gpu1")
         with patch.dict(os.environ, {"COLAB_CLI_CONFIG_DIR": str(self.cfg)}), \
-             patch.object(svc, "run") as mock_run:
+             patch.object(svc, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as mock_run:
             self.assertFalse(svc.ensure_session(service_other))
         mock_run.assert_called_once()
         self.assertEqual(mock_run.call_args.kwargs["env"]["COLAB_ACCOUNT"], "gpu1")

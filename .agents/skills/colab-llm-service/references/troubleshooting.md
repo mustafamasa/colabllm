@@ -24,7 +24,7 @@
 | DNS conflict after reinstall or new configuration | A new project ID differs from the existing DNS/route owner | Compare record comments and `frp-status`; see [identity repair](frp.md#dns-conflict-after-creating-a-new-user-configuration) |
 | Changing local `api_token` does not change accepted requests | A running model has its old key loaded | Update persistent state and service-side authentication coherently; see [rotation](auth.md#user-supplied-keys-and-rotation) |
 | SSH diagnostic returns HTTP 429 | Another SSH channel is active | Finish the owned diagnostic connection; preserve unrelated user sessions |
-| `colab new` fails for a GPU | Quota / tier / availability | Try another `--gpu`, check `colab usage` (or `colab usage --all` across accounts), or launch on another account with `up -a <acct>` |
+| `colab new` fails for a GPU | Quota / tier / availability | Allocation refusals are retried every 15s by default (`up --gpu-retry-interval`, `--gpu-wait-timeout`); otherwise try another `--gpu`, check `colab usage` (or `colab usage --all` across accounts), or launch on another account with `up -a <acct>` |
 | Multi-account VM or Drive credential mismatch | Wrong active account or unconfigured shared Drive binding | Inspect `colabllm <name> info --json`, `colab account status`, `colab ext doctor`, and `colabllm doctor -a <acct>` |
 
 Start with offline `colabllm doctor` (or `colabllm doctor -a <acct>`); use `doctor --online` only when read-only authorization probes are needed.

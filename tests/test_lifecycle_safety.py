@@ -212,10 +212,53 @@ class LifecycleSafetyTest(unittest.TestCase):
         (cfg_dir / 'sessions.json').write_text(json.dumps({'test': {'id': 'stale'}}))
         with patch.object(svc.Path, 'home', return_value=fake_home), \
              patch.object(svc, 'check_remote_session', return_value='missing'), \
-             patch.object(svc, 'run') as mock_run:
+             patch.object(svc, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as mock_run:
             svc.ensure_session(self.service)
         cmds = [call.args[0] for call in mock_run.call_args_list]
         self.assertEqual(cmds, [['colab', 'stop', '-s', 'test'], ['colab', 'new', '-s', 'test', '--gpu', 'T4']])
+
+    def colab_new_results(self, *results):
+        return [subprocess.CompletedProcess([], code, '', err) for code, err in results]
+
+    def test_ensure_session_waits_for_unavailable_accelerator(self):
+        refused = (1, "[colab] Allocation refused (precondition failed). This can mean too many active sessions\n")
+        # Real rich-rendered `colab new` output for a G4 503: the error line is hard-wrapped at 80 columns.
+        busy = (1, "[colab] Creating session 'test'...\n"
+                   "│ ❱ 238 │   │   │   raise ColabRequestError(                                   │\n"
+                   "╰──────────────────────────────────────────────────────────────────────────────╯\n"
+                   "ColabRequestError: Failed to issue request POST \n"
+                   "https://colab.research.google.com/tun/m/assign?nbh=9120f6af_6487_4e9b_9a3f_8a2d1\n"
+                   "54410c9&variant=GPU&accelerator=G4: Service Unavailable\n")
+        with patch.object(svc, 'run', side_effect=self.colab_new_results(refused, busy, (0, ''))) as mock_run, \
+             patch.object(svc.time, 'sleep') as sleep, contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertFalse(svc.ensure_session(self.service, force_new=True, retry_interval=15, single_assign=True))
+        self.assertEqual(mock_run.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [15, 15])
+        self.assertTrue(all(call.kwargs['env']['COLAB_CLI_ASSIGN_RETRIES'] == '0' for call in mock_run.call_args_list))
+        self.assertIn('Service Unavailable', err.getvalue())
+        self.assertNotIn('ColabRequestError', err.getvalue())
+
+    def test_ensure_session_does_not_retry_other_failures_or_disabled_retry(self):
+        with patch.object(svc, 'run', side_effect=self.colab_new_results((1, 'Traceback: auth token expired\n'))), \
+             patch.object(svc.time, 'sleep') as sleep, contextlib.redirect_stderr(io.StringIO()), \
+             self.assertRaises(CliError) as caught:
+            svc.ensure_session(self.service, force_new=True, retry_interval=15)
+        self.assertNotIsInstance(caught.exception, svc.AcceleratorUnavailableError)
+        sleep.assert_not_called()
+        refused = (1, '[colab] Allocation refused (precondition failed).\n')
+        with patch.object(svc, 'run', side_effect=self.colab_new_results(refused)) as mock_run, \
+             self.assertRaises(svc.AcceleratorUnavailableError):
+            svc.ensure_session(self.service, force_new=True, retry_interval=0)
+        self.assertNotIn('COLAB_CLI_ASSIGN_RETRIES', mock_run.call_args.kwargs['env'] or {})
+
+    def test_ensure_session_gives_up_after_wait_timeout(self):
+        refused = (1, '[colab] Allocation refused (precondition failed).\n')
+        clock = iter([0, 0, 10, 20, 30])
+        with patch.object(svc, 'run', side_effect=self.colab_new_results(*[refused] * 4)) as mock_run, \
+             patch.object(svc.time, 'sleep'), patch.object(svc.time, 'monotonic', side_effect=lambda: next(clock)), \
+             self.assertRaisesRegex(svc.AcceleratorUnavailableError, 'gave up after 3 attempts'):
+            svc.ensure_session(self.service, force_new=True, retry_interval=10, wait_timeout=25)
+        self.assertEqual(mock_run.call_count, 3)
 
 
 if __name__ == '__main__':
