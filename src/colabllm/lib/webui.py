@@ -16,6 +16,7 @@ import re
 import runpy
 import secrets
 import shutil
+import signal
 import socketserver
 import subprocess
 import sys
@@ -25,7 +26,8 @@ import urllib.parse
 import uuid
 
 import colabsvc
-from processes import runner_alive
+import paths
+from processes import owned_process, process_identity, runner_alive
 
 PACKAGE = Path(__file__).resolve().parents[1]
 SERVICES_DIR = PACKAGE / 'services'
@@ -362,20 +364,119 @@ def environment() -> dict:
 
 
 # --------------------------------------------------------------------------- operations
+OP_RUNNER = Path(__file__).resolve().with_name('op_runner.py')
+OP_ID_RE = re.compile(r'[0-9a-f]{12}')
+OPS_KEEP = 100
+LAST_LINE_BYTES = 4096
+
+
 def _popen(*args, **kwargs):
     return subprocess.Popen(*args, **kwargs)
 
 
+def _ops_dir() -> Path:
+    return colabsvc.STATE_ROOT / 'ui' / 'operations'
+
+
+def _read_tail(path: Path, limit: int) -> str:
+    try:
+        with path.open('rb') as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            data = handle.read()
+    except OSError:
+        return ''
+    text = data.decode('utf-8', errors='replace')
+    return text if size <= limit else text.split('\n', 1)[-1]
+
+
 class Operations:
-    """Lifecycle commands started from the panel, run as the same service scripts the CLI execs."""
+    """Lifecycle commands started from the panel, run as the same service scripts the CLI execs.
+
+    Each operation runs detached through `op_runner.py` with its output in a log file and its exit
+    status in an `.exit` file, so it survives closing the panel and is listed again on restart.
+    """
 
     def __init__(self):
         self.items: dict[str, dict] = {}
         self.lock = threading.Lock()
+        self.root: Path | None = None
 
+    # -- persistence (callers hold self.lock)
+    def _load(self):
+        root = _ops_dir()
+        if root == self.root:
+            return
+        self.root, self.items = root, {}
+        if not root.is_dir():
+            return
+        for path in root.glob('*.json'):
+            if not OP_ID_RE.fullmatch(path.stem):
+                continue
+            try:
+                op = json.loads(path.read_text(encoding='utf-8'))
+            except (OSError, ValueError, UnicodeError):
+                continue
+            if isinstance(op, dict) and op.get('id') == path.stem and isinstance(op.get('started'), (int, float)):
+                self.items[op['id']] = op
+        for op in sorted(self.items.values(), key=lambda o: -o['started'])[OPS_KEEP:]:
+            self._refresh(op)
+            if op['state'] != 'running':
+                self._remove(op['id'])
+
+    def _path(self, op_id, suffix):
+        return self.root / f'{op_id}{suffix}'
+
+    def _save(self, op):
+        paths.private_dir(self.root.parent)
+        paths.private_dir(self.root)
+        target = self._path(op['id'], '.json')
+        tmp = target.with_name(f'.{target.name}.tmp')
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(op, handle)
+        os.replace(tmp, target)
+
+    def _remove(self, op_id):
+        self.items.pop(op_id, None)
+        for suffix in ('.json', '.log', '.exit'):
+            with contextlib.suppress(OSError):
+                self._path(op_id, suffix).unlink()
+
+    def _refresh(self, op):
+        if op['state'] != 'running':
+            return
+        try:
+            result = json.loads(self._path(op['id'], '.exit').read_text(encoding='utf-8'))
+        except (OSError, ValueError, UnicodeError):
+            result = None
+        if isinstance(result, dict) and isinstance(result.get('exit_code'), int):
+            self._complete(op, result['exit_code'], result.get('finished'))
+        elif op.get('pid') and not owned_process(op['pid'], op.get('identity')):
+            # The wrapper vanished without recording a status (e.g. killed with SIGKILL).
+            self._complete(op, None, time.time())
+
+    def _complete(self, op, code, finished=None):
+        if code == 0:
+            state = 'succeeded'
+        elif op.get('cancel_requested'):
+            state = 'cancelled'
+        else:
+            state = 'failed'
+        op.update(state=state, exit_code=code, finished=finished or time.time())
+        self._save(op)
+
+    # -- API
     def busy(self, instance_id):
         with self.lock:
-            return any(op['target'] == instance_id and op['state'] == 'running' for op in self.items.values())
+            self._load()
+            for op in self.items.values():
+                if op['target'] == instance_id:
+                    self._refresh(op)
+                    if op['state'] == 'running':
+                        return True
+            return False
 
     def start(self, service: str, action: str, args: list[str], instance_id: str, summary: str) -> dict:
         if self.busy(instance_id):
@@ -384,47 +485,90 @@ class Operations:
         cmd = [sys.executable, str(script), '--no-color', *args]
         op = dict(id=uuid.uuid4().hex[:12], service=service, target=instance_id, action=action, summary=summary,
                   command='colabllm ' + ' '.join([service, *args]), state='running', exit_code=None,
-                  started=time.time(), finished=None, output='')
+                  started=time.time(), finished=None, pid=None, identity=None, cancel_requested=None)
         with self.lock:
+            self._load()
             self.items[op['id']] = op
+            self._save(op)
+        log_path = self._path(op['id'], '.log')
         env = {**os.environ, 'NO_COLOR': '1', 'PYTHONUNBUFFERED': '1'}
+        wrapper = [sys.executable, str(OP_RUNNER), str(self._path(op['id'], '.exit')), '--', *cmd]
         try:
-            proc = _popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                    text=True, bufsize=1, env=env, cwd=str(Path.home()))
+            fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            try:
+                # A new session keeps the panel's Ctrl+C and terminal hangup away from the operation.
+                proc = _popen(wrapper, stdin=subprocess.DEVNULL, stdout=fd, stderr=fd, env=env,
+                              cwd=str(Path.home()), start_new_session=True)
+            finally:
+                os.close(fd)
         except OSError as error:
-            self._finish(op, 127, f'Failed to start: {error}\n')
+            with contextlib.suppress(OSError), log_path.open('a', encoding='utf-8') as handle:
+                handle.write(f'Failed to start: {error}\n')
+            with self.lock:
+                self._complete(op, 127)
             return self.public(op)
-        threading.Thread(target=self._pump, args=(op, proc), daemon=True).start()
+        pid = getattr(proc, 'pid', None)
+        with self.lock:
+            op.update(pid=pid, identity=process_identity(pid) if isinstance(pid, int) else None)
+            self._save(op)
+        threading.Thread(target=self._reap, args=(op, proc), daemon=True).start()
         return self.public(op)
 
-    def _pump(self, op, proc):
-        for line in proc.stdout:
-            with self.lock:
-                op['output'] = (op['output'] + line)[-OUTPUT_LIMIT:]
-        self._finish(op, proc.wait(), '')
-
-    def _finish(self, op, code, extra):
+    def _reap(self, op, proc):
+        code = proc.wait()
         with self.lock:
-            op['output'] = (op['output'] + extra)[-OUTPUT_LIMIT:]
-            op.update(state='succeeded' if code == 0 else 'failed', exit_code=code, finished=time.time())
+            self._refresh(op)
+            if op['state'] == 'running':
+                self._complete(op, code if code >= 0 else 128 - code)
+
+    def cancel(self, op_id):
+        with self.lock:
+            self._load()
+            op = self.items.get(op_id) if OP_ID_RE.fullmatch(op_id or '') else None
+            if op is None:
+                raise LookupError('unknown operation')
+            self._refresh(op)
+            if op['state'] != 'running':
+                raise RuntimeError('The operation has already finished')
+            if op['action'] != 'deploy':
+                raise RuntimeError('Only deployments can be cancelled')
+            if not owned_process(op.get('pid'), op.get('identity')):
+                raise RuntimeError('The operation process could not be verified; it was not signalled')
+            try:
+                os.kill(op['pid'], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            op['cancel_requested'] = time.time()
+            self._save(op)
+            return self.public(op)
 
     def public(self, op, with_output=False):
-        data = {k: v for k, v in op.items() if k != 'output'}
-        lines = op['output'].strip().splitlines()
+        data = {k: v for k, v in op.items() if k not in ('pid', 'identity')}
+        log_path = self._path(op['id'], '.log') if self.root else None
+        text = _read_tail(log_path, OUTPUT_LIMIT if with_output else LAST_LINE_BYTES) if log_path else ''
+        lines = text.strip().splitlines()
         data['last_line'] = lines[-1][:240] if lines else ''
+        data['cancellable'] = op['state'] == 'running' and op['action'] == 'deploy'
         if with_output:
-            data['output'] = op['output']
+            data['output'] = text
         return data
 
     def list(self):
         with self.lock:
-            return sorted((self.public(op) for op in self.items.values()), key=lambda o: -o['started'])
+            self._load()
+            for op in self.items.values():
+                self._refresh(op)
+            ops = sorted(self.items.values(), key=lambda o: -o['started'])
+            return [self.public(op) for op in ops]
 
     def get(self, op_id):
         with self.lock:
+            self._load()
             if op_id not in self.items:
                 raise LookupError('unknown operation')
-            return self.public(self.items[op_id], with_output=True)
+            op = self.items[op_id]
+            self._refresh(op)
+            return self.public(op, with_output=True)
 
 
 OPS = Operations()
@@ -726,6 +870,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._send(202, start_delete(parts[1], body))
             if parts == ['instances', 'stop']:
                 return self._send(202, start_down_many(body))
+            if len(parts) == 3 and parts[0] == 'operations' and parts[2] == 'cancel':
+                if body:
+                    raise ValueError('Cancelling does not accept parameters')
+                return self._send(202, OPS.cancel(parts[1]))
             if parts == ['instances', 'delete']:
                 return self._send(202, start_delete_many(body))
             if parts == ['tunnel-config']:
@@ -776,7 +924,8 @@ def serve(port=8765, open_browser=True, token=None):
     Handler.allowed_hosts = {f'127.0.0.1:{actual}', f'localhost:{actual}'}
     url = f'http://127.0.0.1:{actual}/#token={token}'
     print(f'colabllm control panel: {url}', flush=True)
-    print('Listening on 127.0.0.1 only. Press Ctrl+C to stop; running services are not affected.', file=sys.stderr, flush=True)
+    print('Listening on 127.0.0.1 only. Press Ctrl+C to stop; running services and in-progress deployments '
+          'keep running and are listed again when the panel is reopened.', file=sys.stderr, flush=True)
     if open_browser:
         import webbrowser
         threading.Timer(0.4, webbrowser.open, args=(url,)).start()

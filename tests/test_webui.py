@@ -2,6 +2,7 @@
 import http.client
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,19 @@ sys.path.insert(0, str(ROOT / "src/colabllm/lib"))
 
 import colabsvc  # noqa: E402
 import webui  # noqa: E402
+
+
+def op_command(popen):
+    """The service command the panel ran, unwrapped from `op_runner.py EXIT_FILE -- ...`."""
+    argv = popen.call_args.args[0]
+    return argv[argv.index("--") + 1:]
+
+
+def _killpg(pid):
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 class CatalogTest(unittest.TestCase):
@@ -275,7 +289,7 @@ class ServerTest(unittest.TestCase):
             response, data = self.request("POST", "/api/services/ollama/deploy",
                                           body={"instance": "7", "gpu": "L4", "quick_tunnel": True, "no_drive": True})
             self.assertEqual(response.status, 202)
-            cmd = popen.call_args.args[0]
+            cmd = op_command(popen)
             self.assertEqual(cmd[:3], [sys.executable, str(webui.SERVICES_DIR / "ollama.py"), "--no-color"])
             self.assertEqual(cmd[3:], ["up", "--detach", "-i", "7", "--gpu", "L4", "--quick-tunnel", "--no-drive"])
             op = json.loads(data)
@@ -294,7 +308,7 @@ class ServerTest(unittest.TestCase):
         with patch.object(webui, "_popen", return_value=FakeProc()) as popen:
             response, _ = self.request("POST", "/api/instances/ollama-2/stop", body={"delete_tunnel": True})
             self.assertEqual(response.status, 202)
-            self.assertEqual(popen.call_args.args[0][3:], ["down", "-i", "2", "--delete-tunnel"])
+            self.assertEqual(op_command(popen)[3:], ["down", "-i", "2", "--delete-tunnel"])
 
 
     def test_options_schema_endpoint_reads_the_cli_parser(self):
@@ -311,7 +325,7 @@ class ServerTest(unittest.TestCase):
             response, _ = self.request("POST", "/api/services/comfyui/deploy", body={
                 "instance": "wf", "options": {"--workflow": ["https://example.com/a.json", "flux-dev"]}})
             self.assertEqual(response.status, 202)
-            self.assertEqual(popen.call_args.args[0][-2:], ["--workflow=https://example.com/a.json", "--workflow=flux-dev"])
+            self.assertEqual(op_command(popen)[-2:], ["--workflow=https://example.com/a.json", "--workflow=flux-dev"])
             response, data = self.request("POST", "/api/services/ollama/deploy", body={"options": {"--context-length": "lots"}})
             self.assertEqual(response.status, 400)
             self.assertIn("invalid int value", json.loads(data)["error"])
@@ -341,7 +355,7 @@ class ServerTest(unittest.TestCase):
         with patch.object(webui, "_popen", return_value=FakeProc()) as popen:
             response, data = self.request("POST", "/api/instances/ollama-2/delete", body={})
             self.assertEqual(response.status, 202, data)
-            self.assertEqual(popen.call_args.args[0][3:], ["purge", "-i", "2"])
+            self.assertEqual(op_command(popen)[3:], ["purge", "-i", "2"])
             response, data = self.request("POST", "/api/instances/delete", body={"ids": ["ollama-2", "missing"]})
             self.assertEqual([(r["id"], r["ok"]) for r in json.loads(data)["results"]], [("ollama-2", True), ("missing", False)])
 
@@ -361,10 +375,66 @@ class ServerTest(unittest.TestCase):
                 return 0
         with patch.object(webui, "instances", return_value=[stopped]), patch.object(webui, "_popen", return_value=FakeProc()) as popen:
             self.request("POST", "/api/instances/ollama-2/delete", body={"delete_tunnel": False})
-            self.assertEqual(popen.call_args.args[0][-1], "--keep-tunnel")
+            self.assertEqual(op_command(popen)[-1], "--keep-tunnel")
             time.sleep(0.05)
             self.request("POST", "/api/instances/ollama-2/delete", body={})
-            self.assertEqual(popen.call_args.args[0][-1], "--delete-tunnel")
+            self.assertEqual(op_command(popen)[-1], "--delete-tunnel")
+
+
+class PersistentOperationsTest(unittest.TestCase):
+    """Real op_runner processes: operations outlive the panel and can be cancelled after a restart."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        root = Path(self.tmp.name)
+        services = root / "services-src"
+        services.mkdir()
+        (services / "fake.py").write_text(
+            "import sys, time\n"
+            "print('waiting for G4: ' + ' '.join(sys.argv[1:]), flush=True)\n"
+            "time.sleep(0 if 'down' in sys.argv else 30)\n")
+        for patcher in (patch.object(colabsvc, "STATE_ROOT", root / "home"), patch.object(webui, "SERVICES_DIR", services)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def wait_for(self, ops, op_id, predicate, timeout=10):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            op = ops.get(op_id)
+            if predicate(op):
+                return op
+            time.sleep(0.05)
+        self.fail(f"operation never reached the expected state: {ops.get(op_id)}")
+
+    def test_deploy_survives_panel_restart_and_cancels(self):
+        panel = webui.Operations()
+        op = panel.start("fake", "deploy", ["up", "--detach"], "fake", "Deploy fake")
+        pid = json.loads((colabsvc.STATE_ROOT / "ui/operations" / f"{op['id']}.json").read_text())["pid"]
+        self.addCleanup(_killpg, pid)
+        self.assertEqual(os.getsid(pid), pid, "the operation must run in its own session")
+        self.assertNotIn("pid", op)
+
+        reopened = webui.Operations()  # a new panel process reads the persisted operation
+        running = self.wait_for(reopened, op["id"], lambda o: "waiting for G4" in o["output"])
+        self.assertEqual((running["state"], running["cancellable"]), ("running", True))
+        self.assertTrue(reopened.busy("fake"))
+        with self.assertRaisesRegex(RuntimeError, "already running"):
+            reopened.start("fake", "deploy", ["up"], "fake", "again")
+
+        reopened.cancel(op["id"])
+        done = self.wait_for(reopened, op["id"], lambda o: o["state"] != "running")
+        self.assertEqual((done["state"], done["exit_code"], done["cancellable"]), ("cancelled", 143, False))
+        with self.assertRaisesRegex(RuntimeError, "already finished"):
+            reopened.cancel(op["id"])
+
+    def test_only_running_deployments_are_cancellable(self):
+        panel = webui.Operations()
+        op = panel.start("fake", "stop", ["down"], "fake", "Stop fake")
+        done = self.wait_for(panel, op["id"], lambda o: o["state"] != "running")
+        self.assertEqual((done["state"], done["exit_code"]), ("succeeded", 0))
+        with self.assertRaises(LookupError):
+            panel.cancel("../../etc")
 
 
 class ServiceOptionsTest(unittest.TestCase):

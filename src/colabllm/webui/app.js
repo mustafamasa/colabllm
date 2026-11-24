@@ -33,8 +33,12 @@
   const icon = (name, cls = '') => `<svg class="i ${cls}"><use href="#i-${name}"/></svg>`;
   const CAT_ICON = { LLM: 'llm', Image: 'image', Video: 'video', Audio: 'audio', Document: 'doc', Training: 'train', Other: 'cpu' };
   const svcIcon = (cat, cls = '') => `<span class="svc-icon cat-${esc(cat)} ${cls}">${icon(CAT_ICON[cat] || 'cpu')}</span>`;
-  const STATUS_LABEL = { ready: 'Ready', starting: 'Provisioning', failed: 'Failed', stopped: 'Stopped', running: 'Running', succeeded: 'Succeeded', pass: 'Pass', fail: 'Fail', warn: 'Warning', skip: 'Skipped' };
+  const STATUS_LABEL = { ready: 'Ready', starting: 'Provisioning', failed: 'Failed', stopped: 'Stopped', running: 'Running', succeeded: 'Succeeded', cancelled: 'Cancelled', cancelling: 'Cancelling…', pass: 'Pass', fail: 'Fail', warn: 'Warning', skip: 'Skipped' };
   const pill = (status) => `<span class="pill ${esc(status)}">${esc(STATUS_LABEL[status] || status)}</span>`;
+  const opState = (o) => (o.state === 'running' && o.cancel_requested ? 'cancelling' : o.state);
+  const cancelOpButton = (o) => (o.cancellable
+    ? `<button class="icon-btn sm danger" data-action="cancel-op" data-id="${esc(o.id)}" title="${o.cancel_requested ? 'Cancelling…' : 'Cancel deployment'}" ${o.cancel_requested ? 'disabled' : ''}>${icon('x')}</button>`
+    : '');
   const fmtNum = (n, d = 0) => (n == null || Number.isNaN(n)) ? '—' : Number(n).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 
   function fmtDuration(sec) {
@@ -187,7 +191,7 @@
     return `<ul class="feed">${ops.map((o) => `<li data-action="op" data-id="${esc(o.id)}">
       <span class="feed-icon ${esc(o.state)}">${icon(o.state === 'running' ? 'refresh' : o.state === 'succeeded' ? 'check' : 'xcircle', o.state === 'running' ? 'spin' : '')}</span>
       <div class="feed-main"><div class="feed-title">${esc(o.summary)}</div><div class="feed-sub">${esc(o.last_line || o.command)}</div></div>
-      <span class="feed-time">${fmtAgo(o.started)}</span></li>`).join('')}</ul>`;
+      ${cancelOpButton(o)}<span class="feed-time">${fmtAgo(o.started)}</span></li>`).join('')}</ul>`;
   }
 
   // ------------------------------------------------------------------ pages
@@ -317,17 +321,17 @@
   function pageOperations() {
     const ops = S.data.operations.filter((o) => matches(o.summary, o.command, o.target));
     return `
-      <div class="page-head"><div><h1>Operations</h1><p>Audit trail of lifecycle commands started from this console session.</p></div></div>
+      <div class="page-head"><div><h1>Operations</h1><p>Lifecycle commands started from this console. In-progress deployments keep running when the console is closed and are listed again when it reopens.</p></div></div>
       <section class="card">${ops.length ? `<div class="table-wrap"><table class="data">
         <thead><tr><th>Operation</th><th>Status</th><th>Command</th><th>Started</th><th>Duration</th><th>Exit</th></tr></thead>
         <tbody>${ops.map((o) => `<tr class="clickable" data-action="op" data-id="${esc(o.id)}">
           <td><div class="cell-title">${esc(o.summary)}</div><div class="cell-sub">${esc(o.id)}</div></td>
-          <td>${pill(o.state)}</td>
+          <td><span class="op-status">${pill(opState(o))}${cancelOpButton(o)}</span></td>
           <td><code class="cell-sub">${esc(o.command)}</code></td>
           <td class="num">${fmtTime(o.started)}</td>
           <td class="num">${fmtDuration((o.finished || Date.now() / 1000) - o.started)}</td>
           <td class="num">${o.exit_code ?? '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`
-        : emptyState('activity', 'No operations yet', 'Operations are kept in memory for as long as this console runs. The CLI history is unaffected.')}</section>`;
+        : emptyState('activity', 'No operations yet', 'Operations started here are kept under the colabllm home directory, so they survive restarting the console. The CLI history is unaffected.')}</section>`;
   }
 
   function pageDiagnostics() {
@@ -766,6 +770,28 @@
     };
   }
 
+  function cancelOpModal(opId) {
+    const o = S.data && S.data.operations.find((x) => x.id === opId);
+    const title = o ? o.summary : 'this deployment';
+    openModal('Cancel deployment?',
+      `<p>This stops <strong>${esc(title)}</strong>, including any wait for a free accelerator.</p>
+       <div class="note">${icon('shield')}<span>A Colab request already in flight is allowed to finish first; if it allocated a session, that session is stopped so no VM is left running.</span></div>`,
+      `<button class="btn" data-close="modal">Keep running</button><button class="btn btn-danger" id="modal-submit">${icon('x')}Cancel deployment</button>`);
+    $('#modal-submit').onclick = async (e) => {
+      const btn = e.currentTarget; // currentTarget is null once the handler awaits
+      btn.disabled = true;
+      try {
+        const op = await api(`/api/operations/${encodeURIComponent(opId)}/cancel`, { method: 'POST' });
+        closeModal();
+        toast('info', 'Cancelling deployment', op.target);
+        refresh();
+      } catch (err) {
+        btn.disabled = false;
+        toast('bad', 'Cancel rejected', err.message, 7000);
+      }
+    };
+  }
+
   function stopModal(id) {
     const r = S.data.instances.find((x) => x.id === id);
     if (!r) return;
@@ -875,7 +901,7 @@
       const instance = S.data && S.data.instances.find((x) => x.id === op.target);
       $('#drawer-body').innerHTML = `
         <dl class="kv">
-          <dt>Status</dt><dd>${pill(op.state)}</dd>
+          <dt>Status</dt><dd><span class="op-status">${pill(opState(op))}${op.cancellable ? `<button class="btn btn-sm btn-danger-outline" data-action="cancel-op" data-id="${esc(op.id)}" ${op.cancel_requested ? 'disabled' : ''}>${icon('x')}${op.cancel_requested ? 'Cancelling…' : 'Cancel deployment'}</button>` : ''}</span></dd>
           <dt>Command</dt><dd><code>${esc(op.command)}</code></dd>
           <dt>Started</dt><dd>${fmtTime(op.started)}</dd>
           <dt>Duration</dt><dd class="num">${fmtDuration((op.finished || Date.now() / 1000) - op.started)}</dd>
@@ -920,6 +946,7 @@
     else if (action === 'secrets') secretsModal(id);
     else if (action === 'logs') logDrawer(id);
     else if (action === 'op') openOpDrawer(id);
+    else if (action === 'cancel-op') { e.stopPropagation(); cancelOpModal(id); }
     else if (action === 'inst-filter') { S.instFilter = el.dataset.value; renderPage(); }
     else if (action === 'cat-filter') { S.catFilter = el.dataset.value; renderPage(); }
     else if (action === 'doctor') runDoctor(false);

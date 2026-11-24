@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
@@ -259,6 +260,28 @@ class LifecycleSafetyTest(unittest.TestCase):
              self.assertRaisesRegex(svc.AcceleratorUnavailableError, 'gave up after 3 attempts'):
             svc.ensure_session(self.service, force_new=True, retry_interval=10, wait_timeout=25)
         self.assertEqual(mock_run.call_count, 3)
+
+    def cancelled_wait(self, run_side_effect, sleep_side_effect=None):
+        with patch.object(svc, 'run', side_effect=run_side_effect) as mock_run, \
+             patch.object(svc.time, 'sleep', side_effect=sleep_side_effect), \
+             contextlib.redirect_stderr(io.StringIO()), self.assertRaises(svc.DeployCancelled) as caught:
+            with svc._cancellable_up(self.service, self.state):
+                svc.ensure_session(self.service, force_new=True, retry_interval=15, single_assign=True)
+        self.assertEqual(caught.exception.code, 143)
+        self.assertIsNone(svc._UP_CANCEL)
+        return [call.args[0][:2] for call in mock_run.call_args_list]
+
+    def test_cancel_while_waiting_for_accelerator_stops_without_a_session(self):
+        refused = subprocess.CompletedProcess([], 1, '', '[colab] Allocation refused (precondition failed).\n')
+        cmds = self.cancelled_wait(lambda *a, **k: refused, lambda seconds: os.kill(os.getpid(), signal.SIGTERM))
+        self.assertEqual(cmds, [['colab', 'new']])
+
+    def test_cancel_during_colab_new_waits_for_it_and_releases_the_new_session(self):
+        def colab(cmd, **kwargs):
+            if cmd[1] == 'new':
+                os.kill(os.getpid(), signal.SIGTERM)  # arrives while the assign request is in flight
+            return subprocess.CompletedProcess(cmd, 0, '', '')
+        self.assertEqual(self.cancelled_wait(colab), [['colab', 'new'], ['colab', 'stop']])
 
 
 if __name__ == '__main__':

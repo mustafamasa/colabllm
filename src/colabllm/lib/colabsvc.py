@@ -42,6 +42,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -1066,6 +1067,56 @@ class AcceleratorUnavailableError(CliError):
     """`colab new` was refused because the requested GPU/TPU cannot be allocated right now."""
 
 
+class DeployCancelled(CliError):
+    """`up` received SIGTERM (e.g. the control panel's Cancel) before the runner took over."""
+
+
+class _UpCancellation:
+    """SIGTERM while `up` provisions aborts promptly, except around `colab new`.
+
+    Killing `colab new` mid-request could leave an untracked, billed VM, so the signal is deferred
+    until the request returns; a session allocated by this `up` is then stopped by `cmd_up`.
+    """
+
+    def __init__(self):
+        self.requested = False
+        self.deferred = 0
+        self.created_session = False
+        self.signum = signal.SIGTERM
+
+    def handle(self, signum, frame):
+        self.requested = True
+        self.signum = signum
+        if not self.deferred:
+            self.raise_cancelled()
+
+    def raise_cancelled(self):
+        raise DeployCancelled("deploy cancelled", 128 + int(self.signum))
+
+    @contextlib.contextmanager
+    def deferral(self):
+        self.deferred += 1
+        try:
+            yield
+        finally:
+            self.deferred -= 1
+
+
+_UP_CANCEL: _UpCancellation | None = None
+
+
+@contextlib.contextmanager
+def _defer_cancel():
+    cancel = _UP_CANCEL
+    if cancel is None:
+        yield
+        return
+    with cancel.deferral():
+        yield
+    if cancel.requested:
+        cancel.raise_cancelled()
+
+
 # `colab new` exits 1 for every failure, so allocation refusals are recognised by the colab CLI's
 # messages: 412 capacity/usage refusal, 400 accelerator rejection, or 5xx on the assign request
 # (Colab answers 503 when no machine of the requested type is free).
@@ -1103,7 +1154,10 @@ def _colab_new(svc: Service, env, *, assign_retries: int | None = None) -> None:
         # short (the CLI's own 10/20/40s backoff can approach the external command timeout).
         env = {**(env if env is not None else os.environ), "COLAB_CLI_ASSIGN_RETRIES": str(assign_retries)}
     log(" ".join(args))
-    res = run(args, capture=True, check=False, env=env)
+    with _defer_cancel():
+        res = run(args, capture=True, check=False, env=env)
+        if res.returncode == 0 and _UP_CANCEL is not None:
+            _UP_CANCEL.created_session = True
     stdout, stderr = res.stdout or "", res.stderr or ""
     if res.returncode == 0:
         sys.stdout.write(stdout)
@@ -1173,12 +1227,44 @@ def ensure_session(
         return False
 
 
+@contextlib.contextmanager
+def _cancellable_up(svc: Service, state: "State"):
+    """Turn SIGTERM during provisioning into a clean `DeployCancelled` that leaves no VM behind."""
+    global _UP_CANCEL
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    cancel = _UpCancellation()
+    previous = signal.signal(signal.SIGTERM, cancel.handle)
+    _UP_CANCEL = cancel
+    try:
+        yield
+    except DeployCancelled:
+        cancel.deferred += 1  # a repeated Cancel must not interrupt the cleanup below
+        st = state.load()
+        runner_started = runner_alive(st) and st.get("runner_pid") != os.getpid()
+        if cancel.created_session and not runner_started:
+            warn(f"deploy cancelled; stopping the Colab session '{svc.name}' allocated by this start")
+            res = run(["colab", "stop", "-s", svc.name], capture=True, check=False, env=colab_env_for(svc))
+            if res.returncode != 0:
+                warn(f"`colab stop -s {svc.name}` failed; run `colabllm {svc.base_name or svc.name} down` to release it")
+        elif cancel.created_session:
+            warn("deploy cancelled after the runner started; use `down` to stop it")
+        else:
+            warn("deploy cancelled before a Colab session was allocated")
+        raise
+    finally:
+        _UP_CANCEL = None
+        signal.signal(signal.SIGTERM, previous if previous is not None else signal.SIG_DFL)
+
+
 def cmd_up(svc: Service, script: Path, a) -> None:
     state = State(svc)
     if a.dry_run:
         return _start_up(svc, script, a)
-    with state.lock("operation", blocking=False):
-        launched = _start_up(svc, script, a)
+    with _cancellable_up(svc, state):
+        with state.lock("operation", blocking=False):
+            launched = _start_up(svc, script, a)
     if a.foreground:
         try:
             raise SystemExit(exec_runner(svc, launched))
